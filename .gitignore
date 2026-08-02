@@ -1,0 +1,10 @@
+*.md
+cuda/
+.vscode/
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+*.o
+*.a
