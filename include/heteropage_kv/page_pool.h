@@ -49,7 +49,7 @@ public:
     PagePool& operator=(PagePool const & ) = delete;
 
     PagePool(PagePool&&) = delete;
-    PagePool& operator(PagePool&&) = delete;
+    PagePool& operator=(PagePool&&) = delete;
 
     [[nodiscard]] PageKind kind() const noexcept;
 

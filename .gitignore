@@ -1,5 +1,4 @@
 *.md
-cuda/
 .vscode/
 build/
 build-*/
