@@ -263,6 +263,86 @@
       );
   }
 
+void testExtentPool()
+{
+    PagePool pool(PageKind::Extent, 2);
+
+    expect(
+        pool.kind() == PageKind::Extent,
+        "extent pool must report Extent kind"
+    );
+
+    auto const allocation = pool.allocate();
+
+    expect(
+        allocation.ok(),
+        "extent allocation must succeed"
+    );
+
+    if (!allocation.ok()) {
+        return;
+    }
+
+    expect(
+        allocation.handle.kind == PageKind::Extent,
+        "extent allocation must return an Extent handle"
+    );
+
+    expect(
+        pool.validate(allocation.handle) == PagePoolError::None,
+        "extent handle must be valid"
+    );
+
+    auto const allocated = pool.snapshot();
+
+    expect(
+        allocated.kind == PageKind::Extent,
+        "extent snapshot must report Extent kind"
+    );
+
+    expect(
+        allocated.total_slots == 2,
+        "extent pool total must be 2"
+    );
+
+    expect(
+        allocated.free_slots == 1,
+        "extent pool must have one free slot"
+    );
+
+    expect(
+        allocated.allocated_slots == 1,
+        "extent pool must have one allocated slot"
+    );
+
+    expect(
+        allocated.capacityBalanced(),
+        "extent pool capacity must balance"
+    );
+
+    expect(
+        pool.release(allocation.handle) == PagePoolError::None,
+        "extent release must succeed"
+    );
+
+    auto const released = pool.snapshot();
+
+    expect(
+        released.free_slots == 2,
+        "extent slot must be returned"
+    );
+
+    expect(
+        released.allocated_slots == 0,
+        "extent pool must have no remaining allocation"
+    );
+
+    expect(
+        pool.checkInvariants(),
+        "extent pool invariants must hold"
+    );
+}
+
   } // namespace
 
   static_assert(!std::is_copy_constructible_v<PagePool>);
@@ -274,6 +354,7 @@
   {
       testInvalidConfiguration();
       testAllocateReleaseAndExhaustion();
+      testExtentPool();
       testGenerationAndInvalidRelease();
       testConcurrentAllocateRelease();
 
