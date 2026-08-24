@@ -467,6 +467,115 @@ void testCowOutOfMemoryRollback()
     );
 }
 
+void testMultiPageAppendOutOfMemoryRollback()
+{
+    KvCacheManager manager(2, 1);
+
+    expect(
+        manager.createRequest(35) == KvCacheError::None,
+        "request creation must succeed"
+    );
+    expect(
+        manager.append(35, 3) == KvCacheError::None,
+        "initial partial append must succeed"
+    );
+
+    auto before_optional = manager.blockTable(35);
+
+    expect(
+        before_optional.has_value(),
+        "table must exist before multi-page OOM"
+    );
+
+    if (!before_optional.has_value()) {
+        return;
+    }
+
+    BlockTable const before = *before_optional;
+    PageHandle const original_tail = before.entries()[0].handle;
+    auto const metadata_before = manager.pageMetadata(original_tail);
+    auto const snapshot_before = manager.snapshot();
+
+    expect(
+        metadata_before.has_value(),
+        "tail metadata must exist before multi-page OOM"
+    );
+
+    // 现有尾页还可容纳 5 个 Token。继续追加 14 个 Token 时，
+    // Manager 会先暂存第二页，再在申请第三页时耗尽容量。
+    expect(
+        manager.append(35, 14) == KvCacheError::ResourceExhausted,
+        "multi-page append must report ResourceExhausted"
+    );
+
+    auto const after_optional = manager.blockTable(35);
+    auto const metadata_after = manager.pageMetadata(original_tail);
+    auto const snapshot_after = manager.snapshot();
+
+    expect(
+        after_optional.has_value(),
+        "table must remain after multi-page OOM"
+    );
+    expect(
+        metadata_after.has_value(),
+        "tail metadata must remain after multi-page OOM"
+    );
+
+    if (!after_optional.has_value()
+        || !metadata_before.has_value()
+        || !metadata_after.has_value()) {
+        return;
+    }
+
+    expect(
+        sameTable(before, *after_optional),
+        "failed multi-page append must preserve table and version"
+    );
+    expect(
+        metadata_after->handle == metadata_before->handle,
+        "failed multi-page append must preserve the tail handle"
+    );
+    expect(
+        metadata_after->state == metadata_before->state,
+        "failed multi-page append must preserve the tail state"
+    );
+    expect(
+        metadata_after->valid_tokens == metadata_before->valid_tokens,
+        "failed multi-page append must preserve valid token count"
+    );
+    expect(
+        metadata_after->ref_count == metadata_before->ref_count,
+        "failed multi-page append must preserve reference count"
+    );
+    expect(
+        metadata_after->mutable_owner == metadata_before->mutable_owner,
+        "failed multi-page append must preserve mutable owner"
+    );
+    expect(
+        snapshot_after.micro_pool.allocated_slots
+            == snapshot_before.micro_pool.allocated_slots,
+        "failed multi-page append must release every staged page"
+    );
+    expect(
+        snapshot_after.micro_pool.free_slots
+            == snapshot_before.micro_pool.free_slots,
+        "failed multi-page append must restore free page capacity"
+    );
+    expect(
+        manager.checkInvariants(),
+        "multi-page OOM rollback invariants must hold"
+    );
+
+    expect(
+        manager.releaseRequest(35) == KvCacheError::None,
+        "request release after multi-page OOM must succeed"
+    );
+    expect(
+        manager.snapshot().micro_pool.allocated_slots == 0,
+        "request release must return the original tail page"
+    );
+}
+
 void testExplicitSealAndErrors()
 {
     KvCacheManager manager(2, 1);
@@ -634,6 +743,7 @@ int main()
     testPartialForkAndCopyOnWrite();
     testFullPageFork();
     testCowOutOfMemoryRollback();
+    testMultiPageAppendOutOfMemoryRollback();
     testExplicitSealAndErrors();
     testConcurrentRequests();
 
