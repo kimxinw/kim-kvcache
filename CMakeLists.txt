@@ -111,6 +111,8 @@ add_library(
     kim_kv
     STATIC
         src/page_pool.cpp
+        src/block_table.cpp
+        src/kv_cache_manager.cpp
 )
 
 target_include_directories(
@@ -165,6 +167,36 @@ if(BUILD_TESTING)
 
     set_tests_properties(
         page_pool_contract
+        PROPERTIES
+            TIMEOUT 10
+    )
+
+    add_executable(
+        block_table_test
+        tests/block_table_test.cpp
+    )
+
+    target_compile_options(
+        block_table_test
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    target_link_libraries(
+        block_table_test
+        PRIVATE
+            kim_kv
+    )
+
+    add_test(
+        NAME block_table_contract
+        COMMAND block_table_test
+    )
+
+    set_tests_properties(
+        block_table_contract
         PROPERTIES
             TIMEOUT 10
     )
