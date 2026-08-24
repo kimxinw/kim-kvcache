@@ -2,6 +2,7 @@
 
 #include "heteropage_kv/block_table.h"
 #include "heteropage_kv/page_pool.h"
+#include "heteropage_kv/page_lease.h"
 #include "heteropage_kv/page_state.h"
 #include "heteropage_kv/promotion.h"
 
@@ -33,6 +34,7 @@ struct PageMetadataSnapshot final {
 struct KvCacheManagerSnapshot final {
     std::uint64_t request_count{0};
     std::uint64_t promotion_count{0};
+    std::uint64_t page_lease_count{0};
     PagePoolSnapshot micro_pool{};
     PagePoolSnapshot extent_pool{};
 };
@@ -84,6 +86,22 @@ public:
         PromotionId promotion_id
     );
 
+    // 原子快照当前 BlockTable 并为全部可见 Page 增加 inflight_readers。
+    // 空请求同样返回一个有效租约，以便调用方统一处理生命周期。
+    [[nodiscard]] PageLeaseAcquireResult acquireRequestReadLease(
+        RequestId request_id
+    );
+
+    // 固定一个已 Prepare Promotion 的 8 个 Source 和 1 个 Target。
+    // 该租约必须覆盖 CUDA Copy 从提交到 Event 完成的整个区间。
+    [[nodiscard]] PageLeaseAcquireResult acquirePromotionIoLease(
+        PromotionId promotion_id
+    );
+
+    [[nodiscard]] KvCacheError releasePageLease(
+        PageLeaseId lease_id
+    );
+
     [[nodiscard]] std::optional<BlockTable> blockTable(
         RequestId request_id) const;
 
@@ -127,6 +145,11 @@ private:
         PageHandle target_handle{PageHandle::invalid()};
     };
 
+    struct PageLease final {
+        PageLeaseId lease_id{kInvalidPageLeaseId};
+        std::vector<PageHandle> handles{};
+    };
+
     [[nodiscard]] RuntimeSlot* runtimeSlotLocked(
         PageHandle handle) noexcept;
 
@@ -153,6 +176,13 @@ private:
 
     [[nodiscard]] PromotionId allocatePromotionIdLocked();
 
+    [[nodiscard]] PageLeaseId allocatePageLeaseIdLocked();
+
+    [[nodiscard]] PageLeaseAcquireResult acquirePageLeaseLocked(
+        std::vector<PageHandle> handles,
+        BlockTable table
+    );
+
     [[nodiscard]] KvCacheError rollbackPromotionLocked(
         PromotionId promotion_id
     );
@@ -173,8 +203,10 @@ private:
 
     std::unordered_map<RequestId, RequestState> requests_;
     std::unordered_map<PromotionId, PromotionTransaction> promotions_;
+    std::unordered_map<PageLeaseId, PageLease> page_leases_;
 
     PromotionId next_promotion_id_{1};
+    PageLeaseId next_page_lease_id_{1};
 
     mutable std::mutex mutex_;
 };

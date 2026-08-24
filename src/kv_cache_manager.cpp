@@ -707,6 +707,7 @@ KvCacheManagerSnapshot KvCacheManager::snapshot() const
     return KvCacheManagerSnapshot{
         static_cast<std::uint64_t>(requests_.size()),
         static_cast<std::uint64_t>(promotions_.size()),
+        static_cast<std::uint64_t>(page_leases_.size()),
         micro_pool_.snapshot(),
         extent_pool_.snapshot(),
     };
@@ -741,6 +742,16 @@ bool KvCacheManager::checkInvariantsLocked() const
     );
 
     std::vector<std::uint32_t> expected_extent_pins(
+        extent_runtime_.size(),
+        0
+    );
+
+    std::vector<std::uint32_t> expected_micro_readers(
+        micro_runtime_.size(),
+        0
+    );
+
+    std::vector<std::uint32_t> expected_extent_readers(
         extent_runtime_.size(),
         0
     );
@@ -854,7 +865,6 @@ bool KvCacheManager::checkInvariantsLocked() const
             || target->valid_tokens != kExtentPageTokenCapacity
             || target->ref_count != 0
             || target->promotion_pins != 0
-            || target->inflight_readers != 0
             || target->mutable_owner != kInvalidRequestId
             || transaction.target_handle.slot >=
                 expected_extent_targets.size()
@@ -922,16 +932,54 @@ bool KvCacheManager::checkInvariantsLocked() const
         }
     }
 
+    for (auto const& lease_pair : page_leases_) {
+        PageLeaseId const lease_id = lease_pair.first;
+        PageLease const& lease = lease_pair.second;
+
+        if (lease_id == kInvalidPageLeaseId
+            || lease.lease_id != lease_id) {
+            return false;
+        }
+
+        for (PageHandle const handle : lease.handles) {
+            RuntimeSlot const* runtime = runtimeSlotLocked(handle);
+            std::vector<std::uint32_t>* expected_readers = nullptr;
+
+            switch (handle.kind) {
+            case PageKind::Micro:
+                expected_readers = &expected_micro_readers;
+                break;
+            case PageKind::Extent:
+                expected_readers = &expected_extent_readers;
+                break;
+            }
+
+            if (runtime == nullptr
+                || runtime->state == PageState::Free
+                || runtime->inflight_readers == 0
+                || expected_readers == nullptr
+                || handle.slot >= expected_readers->size()
+                || (*expected_readers)[handle.slot] ==
+                    std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+
+            ++(*expected_readers)[handle.slot];
+        }
+    }
+
     auto const validate_pool = [](
         PageKind kind,
         PagePool const& pool,
         std::vector<RuntimeSlot> const& runtime_slots,
         std::vector<std::uint32_t> const& expected_refs,
         std::vector<std::uint32_t> const& expected_pins,
+        std::vector<std::uint32_t> const& expected_readers,
         std::vector<std::uint8_t> const& expected_targets
     ) {
         if (runtime_slots.size() != expected_refs.size()
             || runtime_slots.size() != expected_pins.size()
+            || runtime_slots.size() != expected_readers.size()
             || runtime_slots.size() != expected_targets.size()) {
             return false;
         }
@@ -951,6 +999,7 @@ bool KvCacheManager::checkInvariantsLocked() const
                     || runtime.mutable_owner != kInvalidRequestId
                     || expected_refs[index] != 0
                     || expected_pins[index] != 0
+                    || expected_readers[index] != 0
                     || expected_targets[index] != 0) {
                     return false;
                 }
@@ -973,7 +1022,9 @@ bool KvCacheManager::checkInvariantsLocked() const
 
             if (pool.validate(handle) != PagePoolError::None
                 || runtime.ref_count != expected_refs[index]
-                || runtime.promotion_pins != expected_pins[index]) {
+                || runtime.promotion_pins != expected_pins[index]
+                || runtime.inflight_readers !=
+                    expected_readers[index]) {
                 return false;
             }
 
@@ -1013,7 +1064,6 @@ bool KvCacheManager::checkInvariantsLocked() const
                     || runtime.ref_count != 0
                     || runtime.valid_tokens != capacity
                     || runtime.promotion_pins != 0
-                    || runtime.inflight_readers != 0
                     || runtime.mutable_owner != kInvalidRequestId) {
                     return false;
                 }
@@ -1045,6 +1095,7 @@ bool KvCacheManager::checkInvariantsLocked() const
                micro_runtime_,
                expected_micro_refs,
                expected_micro_pins,
+               expected_micro_readers,
                expected_micro_targets
            )
         && validate_pool(
@@ -1053,6 +1104,7 @@ bool KvCacheManager::checkInvariantsLocked() const
                extent_runtime_,
                expected_extent_refs,
                expected_extent_pins,
+               expected_extent_readers,
                expected_extent_targets
            );
 }

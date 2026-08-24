@@ -35,6 +35,12 @@ option(
     OFF
 )
 
+option(
+    HETEROPAGE_KV_ENABLE_CUDA
+    "Build K4 CUDA storage and correctness contracts"
+    OFF
+)
+
 if(
     HETEROPAGE_KV_ENABLE_TSAN
     AND
@@ -114,6 +120,8 @@ add_library(
         src/block_table.cpp
         src/kv_cache_manager.cpp
         src/promotion.cpp
+        src/page_lease.cpp
+        src/kv_reference.cpp
 )
 
 target_include_directories(
@@ -136,6 +144,63 @@ target_link_libraries(
         Threads::Threads
         heteropage_kv_sanitizers
 )
+
+# ---------------------------------------------------------------------------
+# Optional K4 CUDA data path
+# ---------------------------------------------------------------------------
+
+if(HETEROPAGE_KV_ENABLE_CUDA)
+    include(CheckLanguage)
+    check_language(CUDA)
+
+    if(NOT CMAKE_CUDA_COMPILER)
+        message(
+            FATAL_ERROR
+            "HETEROPAGE_KV_ENABLE_CUDA=ON requires a CUDA compiler"
+        )
+    endif()
+
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+
+    add_library(
+        kim_kv_cuda
+        STATIC
+            cuda/cuda_kv_storage.cu
+            cuda/cuda_kv_cache.cpp
+    )
+
+    set_target_properties(
+        kim_kv_cuda
+        PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+            CUDA_SEPARABLE_COMPILATION ON
+            POSITION_INDEPENDENT_CODE ON
+    )
+
+    target_include_directories(
+        kim_kv_cuda
+        PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+
+    target_compile_options(
+        kim_kv_cuda
+        PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+            $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+            $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra,-Wpedantic>
+    )
+
+    target_link_libraries(
+        kim_kv_cuda
+        PUBLIC
+            kim_kv
+            CUDA::cudart
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -231,4 +296,97 @@ if(BUILD_TESTING)
         PROPERTIES
             TIMEOUT 10
     )
+
+    add_executable(
+        page_lease_test
+        tests/page_lease_test.cpp
+    )
+
+    target_compile_options(
+        page_lease_test
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    target_link_libraries(
+        page_lease_test
+        PRIVATE
+            kim_kv
+    )
+
+    add_test(
+        NAME page_lease_contract
+        COMMAND page_lease_test
+    )
+
+    set_tests_properties(
+        page_lease_contract
+        PROPERTIES
+            TIMEOUT 10
+    )
+
+    add_executable(
+        kv_reference_test
+        tests/kv_reference_test.cpp
+    )
+
+    target_compile_options(
+        kv_reference_test
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    target_link_libraries(
+        kv_reference_test
+        PRIVATE
+            kim_kv
+    )
+
+    add_test(
+        NAME kv_reference_contract
+        COMMAND kv_reference_test
+    )
+
+    set_tests_properties(
+        kv_reference_contract
+        PROPERTIES
+            TIMEOUT 10
+    )
+
+    if(HETEROPAGE_KV_ENABLE_CUDA)
+        add_executable(
+            cuda_kv_test
+            tests/cuda_kv_test.cpp
+        )
+
+        target_compile_options(
+            cuda_kv_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+        )
+
+        target_link_libraries(
+            cuda_kv_test
+            PRIVATE
+                kim_kv_cuda
+                CUDA::cudart
+        )
+
+        add_test(
+            NAME cuda_kv_contract
+            COMMAND cuda_kv_test
+        )
+
+        set_tests_properties(
+            cuda_kv_contract
+            PROPERTIES
+                TIMEOUT 60
+        )
+    endif()
 endif()

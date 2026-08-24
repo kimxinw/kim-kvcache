@@ -232,7 +232,6 @@ KvCacheError KvCacheManager::rollbackPromotionLocked(
         || target->valid_tokens != kExtentPageTokenCapacity
         || target->ref_count != 0
         || target->promotion_pins != 0
-        || target->inflight_readers != 0
         || target->mutable_owner != kInvalidRequestId
         || extent_pool_.validate(transaction.target_handle)
             != PagePoolError::None) {
