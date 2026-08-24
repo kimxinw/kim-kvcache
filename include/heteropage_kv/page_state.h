@@ -56,6 +56,9 @@ namespace kimkvcache {
         RequestAlreadyExists,
         ResourceExhausted,
         InvalidState,
+        PromotionNotEligible,
+        PromotionNotFound,
+        PromotionConflict,
         InternalInvariantViolation,
     };
 
@@ -75,6 +78,12 @@ namespace kimkvcache {
             return "resource_exhausted";
         case KvCacheError::InvalidState:
             return "invalid_state";
+        case KvCacheError::PromotionNotEligible:
+            return "promotion_not_eligible";
+        case KvCacheError::PromotionNotFound:
+            return "promotion_not_found";
+        case KvCacheError::PromotionConflict:
+            return "promotion_conflict";
         case KvCacheError::InternalInvariantViolation:
             return "internal_invariant_violation";
         }

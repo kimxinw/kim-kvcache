@@ -630,6 +630,13 @@ KvCacheError KvCacheManager::releaseRequest(RequestId request_id)
         return KvCacheError::RequestNotFound;
     }
 
+    KvCacheError const rollback_error =
+        rollbackPromotionsForRequestLocked(request_id);
+
+    if (rollback_error != KvCacheError::None) {
+        return rollback_error;
+    }
+
     BlockTable const& table = request_iterator->second.table;
 
     for (MappingEntry const& entry : table.entries_) {
@@ -699,6 +706,7 @@ KvCacheManagerSnapshot KvCacheManager::snapshot() const
 
     return KvCacheManagerSnapshot{
         static_cast<std::uint64_t>(requests_.size()),
+        static_cast<std::uint64_t>(promotions_.size()),
         micro_pool_.snapshot(),
         extent_pool_.snapshot(),
     };
@@ -723,6 +731,26 @@ bool KvCacheManager::checkInvariantsLocked() const
     );
 
     std::vector<std::uint32_t> expected_extent_refs(
+        extent_runtime_.size(),
+        0
+    );
+
+    std::vector<std::uint32_t> expected_micro_pins(
+        micro_runtime_.size(),
+        0
+    );
+
+    std::vector<std::uint32_t> expected_extent_pins(
+        extent_runtime_.size(),
+        0
+    );
+
+    std::vector<std::uint8_t> expected_micro_targets(
+        micro_runtime_.size(),
+        0
+    );
+
+    std::vector<std::uint8_t> expected_extent_targets(
         extent_runtime_.size(),
         0
     );
@@ -795,12 +823,119 @@ bool KvCacheManager::checkInvariantsLocked() const
         }
     }
 
+    for (auto const& promotion_pair : promotions_) {
+        PromotionId const promotion_id = promotion_pair.first;
+        PromotionTransaction const& transaction = promotion_pair.second;
+
+        if (promotion_id == kInvalidPromotionId
+            || transaction.promotion_id != promotion_id
+            || transaction.request_id == kInvalidRequestId
+            || transaction.target_handle.kind != PageKind::Extent) {
+            return false;
+        }
+
+        auto const request_iterator = requests_.find(transaction.request_id);
+
+        if (request_iterator == requests_.end()) {
+            return false;
+        }
+
+        BlockTable const& table = request_iterator->second.table;
+
+        if (transaction.prepared_table_version > table.version_) {
+            return false;
+        }
+
+        RuntimeSlot const* target =
+            runtimeSlotLocked(transaction.target_handle);
+
+        if (target == nullptr
+            || target->state != PageState::CopyTarget
+            || target->valid_tokens != kExtentPageTokenCapacity
+            || target->ref_count != 0
+            || target->promotion_pins != 0
+            || target->inflight_readers != 0
+            || target->mutable_owner != kInvalidRequestId
+            || transaction.target_handle.slot >=
+                expected_extent_targets.size()
+            || expected_extent_targets[
+                transaction.target_handle.slot] != 0) {
+            return false;
+        }
+
+        expected_extent_targets[transaction.target_handle.slot] = 1;
+
+        auto const first_source = std::find_if(
+            table.entries_.begin(),
+            table.entries_.end(),
+            [&transaction](MappingEntry const& entry) {
+                return entry.handle == transaction.source_handles[0];
+            }
+        );
+
+        if (first_source == table.entries_.end()) {
+            return false;
+        }
+
+        std::size_t const current_source_index =
+            static_cast<std::size_t>(
+                std::distance(table.entries_.begin(), first_source)
+            );
+
+        if (table.entries_.size() - current_source_index
+            < kPromotionSourcePageCount) {
+            return false;
+        }
+
+        for (std::size_t offset = 0;
+             offset < kPromotionSourcePageCount;
+             ++offset) {
+            PageHandle const source_handle =
+                transaction.source_handles[offset];
+            MappingEntry const& entry =
+                table.entries_[current_source_index + offset];
+            RuntimeSlot const* source = runtimeSlotLocked(source_handle);
+            std::uint64_t const expected_begin =
+                static_cast<std::uint64_t>(
+                    transaction.logical_token_begin
+                ) + offset * kMicroPageTokenCapacity;
+
+            if (expected_begin >
+                    std::numeric_limits<std::uint32_t>::max()
+                || source_handle.kind != PageKind::Micro
+                || entry.handle != source_handle
+                || entry.kind != PageKind::Micro
+                || entry.logical_token_begin != expected_begin
+                || entry.valid_tokens != kMicroPageTokenCapacity
+                || source == nullptr
+                || source->state != PageState::Sealed
+                || source->valid_tokens != kMicroPageTokenCapacity
+                || source->ref_count == 0
+                || source->promotion_pins == 0
+                || source->mutable_owner != kInvalidRequestId
+                || source_handle.slot >= expected_micro_pins.size()
+                || expected_micro_pins[source_handle.slot] != 0) {
+                return false;
+            }
+
+            expected_micro_pins[source_handle.slot] = 1;
+        }
+    }
+
     auto const validate_pool = [](
         PageKind kind,
         PagePool const& pool,
         std::vector<RuntimeSlot> const& runtime_slots,
-        std::vector<std::uint32_t> const& expected_refs
+        std::vector<std::uint32_t> const& expected_refs,
+        std::vector<std::uint32_t> const& expected_pins,
+        std::vector<std::uint8_t> const& expected_targets
     ) {
+        if (runtime_slots.size() != expected_refs.size()
+            || runtime_slots.size() != expected_pins.size()
+            || runtime_slots.size() != expected_targets.size()) {
+            return false;
+        }
+
         std::uint32_t observed_allocated = 0;
 
         for (std::size_t index = 0;
@@ -814,7 +949,9 @@ bool KvCacheManager::checkInvariantsLocked() const
                     || runtime.promotion_pins != 0
                     || runtime.inflight_readers != 0
                     || runtime.mutable_owner != kInvalidRequestId
-                    || expected_refs[index] != 0) {
+                    || expected_refs[index] != 0
+                    || expected_pins[index] != 0
+                    || expected_targets[index] != 0) {
                     return false;
                 }
 
@@ -835,11 +972,14 @@ bool KvCacheManager::checkInvariantsLocked() const
             };
 
             if (pool.validate(handle) != PagePoolError::None
-                || runtime.ref_count != expected_refs[index]) {
+                || runtime.ref_count != expected_refs[index]
+                || runtime.promotion_pins != expected_pins[index]) {
                 return false;
             }
 
             std::uint16_t const capacity = pageTokenCapacity(kind);
+            bool const is_expected_target =
+                expected_targets[index] != 0;
 
             switch (runtime.state) {
             case PageState::Free:
@@ -850,7 +990,9 @@ bool KvCacheManager::checkInvariantsLocked() const
                     || runtime.ref_count != 1
                     || runtime.valid_tokens == 0
                     || runtime.valid_tokens >= capacity
-                    || runtime.mutable_owner == kInvalidRequestId) {
+                    || runtime.mutable_owner == kInvalidRequestId
+                    || runtime.promotion_pins != 0
+                    || is_expected_target) {
                     return false;
                 }
                 break;
@@ -859,18 +1001,28 @@ bool KvCacheManager::checkInvariantsLocked() const
                 if (runtime.ref_count == 0
                     || runtime.valid_tokens == 0
                     || runtime.valid_tokens > capacity
-                    || runtime.mutable_owner != kInvalidRequestId) {
+                    || runtime.mutable_owner != kInvalidRequestId
+                    || is_expected_target) {
                     return false;
                 }
                 break;
 
             case PageState::CopyTarget:
-                // 同步 API 返回后不能遗留未提交事务。
-                return false;
+                if (kind != PageKind::Extent
+                    || !is_expected_target
+                    || runtime.ref_count != 0
+                    || runtime.valid_tokens != capacity
+                    || runtime.promotion_pins != 0
+                    || runtime.inflight_readers != 0
+                    || runtime.mutable_owner != kInvalidRequestId) {
+                    return false;
+                }
+                break;
 
             case PageState::Retiring:
                 if (runtime.ref_count != 0
                     || runtime.mutable_owner != kInvalidRequestId
+                    || is_expected_target
                     || (
                         runtime.promotion_pins == 0
                         && runtime.inflight_readers == 0
@@ -891,13 +1043,17 @@ bool KvCacheManager::checkInvariantsLocked() const
                PageKind::Micro,
                micro_pool_,
                micro_runtime_,
-               expected_micro_refs
+               expected_micro_refs,
+               expected_micro_pins,
+               expected_micro_targets
            )
         && validate_pool(
                PageKind::Extent,
                extent_pool_,
                extent_runtime_,
-               expected_extent_refs
+               expected_extent_refs,
+               expected_extent_pins,
+               expected_extent_targets
            );
 }
 
