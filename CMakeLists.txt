@@ -113,6 +113,7 @@ add_library(
         src/page_pool.cpp
         src/block_table.cpp
         src/kv_cache_manager.cpp
+        src/promotion.cpp
 )
 
 target_include_directories(
@@ -197,6 +198,36 @@ if(BUILD_TESTING)
 
     set_tests_properties(
         block_table_contract
+        PROPERTIES
+            TIMEOUT 10
+    )
+
+    add_executable(
+        promotion_test
+        tests/promotion_test.cpp
+    )
+
+    target_compile_options(
+        promotion_test
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    target_link_libraries(
+        promotion_test
+        PRIVATE
+            kim_kv
+    )
+
+    add_test(
+        NAME promotion_contract
+        COMMAND promotion_test
+    )
+
+    set_tests_properties(
+        promotion_contract
         PROPERTIES
             TIMEOUT 10
     )
