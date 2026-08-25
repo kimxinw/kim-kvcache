@@ -451,6 +451,10 @@ __global__ void attentionOutputKernel(
     }
 
     float const maximum = reduction[0];
+    // Every thread must cache the maximum before the shared reduction buffer
+    // is reused for the softmax sum. Without this barrier, faster threads can
+    // overwrite reduction[0] while slower threads are still reading it.
+    __syncthreads();
     float local_sum = 0.0F;
     for (std::uint32_t token = threadIdx.x;
          token < token_count;
