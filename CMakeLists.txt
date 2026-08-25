@@ -41,6 +41,12 @@ option(
     OFF
 )
 
+option(
+    HETEROPAGE_KV_BUILD_BENCHMARKS
+    "Build K5 deterministic benchmark harnesses"
+    ON
+)
+
 if(
     HETEROPAGE_KV_ENABLE_TSAN
     AND
@@ -200,6 +206,103 @@ if(HETEROPAGE_KV_ENABLE_CUDA)
             kim_kv
             CUDA::cudart
     )
+endif()
+
+# ---------------------------------------------------------------------------
+# K5 deterministic benchmark harnesses
+# ---------------------------------------------------------------------------
+
+if(HETEROPAGE_KV_BUILD_BENCHMARKS)
+    set(HETEROPAGE_KV_GIT_COMMIT "unknown")
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            OUTPUT_VARIABLE HETEROPAGE_KV_GIT_COMMIT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE HETEROPAGE_KV_GIT_RESULT
+        )
+        if(NOT HETEROPAGE_KV_GIT_RESULT EQUAL 0)
+            set(HETEROPAGE_KV_GIT_COMMIT "unknown")
+        endif()
+    endif()
+
+    add_library(
+        kim_kv_benchmark
+        STATIC
+            benchmark/benchmark.cpp
+    )
+
+    target_include_directories(
+        kim_kv_benchmark
+        PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+
+    target_compile_definitions(
+        kim_kv_benchmark
+        PRIVATE
+            HETEROPAGE_KV_GIT_COMMIT="${HETEROPAGE_KV_GIT_COMMIT}"
+    )
+
+    target_compile_options(
+        kim_kv_benchmark
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    target_link_libraries(
+        kim_kv_benchmark
+        PUBLIC
+            kim_kv
+    )
+
+    add_executable(
+        kim_kv_cpu_benchmark
+        benchmark/cpu_main.cpp
+    )
+
+    target_compile_options(
+        kim_kv_cpu_benchmark
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    target_link_libraries(
+        kim_kv_cpu_benchmark
+        PRIVATE
+            kim_kv_benchmark
+    )
+
+    if(HETEROPAGE_KV_ENABLE_CUDA)
+        add_executable(
+            kim_kv_cuda_benchmark
+            benchmark/cuda_benchmark.cpp
+            benchmark/cuda_main.cpp
+        )
+
+        target_compile_options(
+            kim_kv_cuda_benchmark
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+        )
+
+        target_link_libraries(
+            kim_kv_cuda_benchmark
+            PRIVATE
+                kim_kv_benchmark
+                kim_kv_cuda
+                CUDA::cudart
+        )
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -385,6 +488,38 @@ if(BUILD_TESTING)
 
         set_tests_properties(
             cuda_kv_contract
+            PROPERTIES
+                TIMEOUT 60
+        )
+    endif()
+
+    if(HETEROPAGE_KV_BUILD_BENCHMARKS)
+        add_executable(
+            benchmark_test
+            tests/benchmark_test.cpp
+        )
+
+        target_compile_options(
+            benchmark_test
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+        )
+
+        target_link_libraries(
+            benchmark_test
+            PRIVATE
+                kim_kv_benchmark
+        )
+
+        add_test(
+            NAME benchmark_contract
+            COMMAND benchmark_test
+        )
+
+        set_tests_properties(
+            benchmark_contract
             PROPERTIES
                 TIMEOUT 60
         )
