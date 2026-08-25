@@ -1,6 +1,4 @@
 *.md
-!README.md
-!benchmark/results/README.md
 .vscode/
 build/
 build-*/

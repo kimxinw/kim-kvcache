@@ -134,6 +134,36 @@ done < <(
         -type f -name '*.csv' -print | LC_ALL=C sort
 )
 
+awk -F, '
+    BEGIN {
+        print "workload,entry_reduction_vs_fixed8_pct,fragmentation_reduction_vs_fixed64_pct,admission_gain_vs_fixed64_pct,promotion_peak_overhead_pct"
+        split("short mixed adversarial long shared_prompt fork_cow fault", order, " ")
+    }
+    $1 == "capacity" && $2 == "cpu_metadata" {
+        key = $3 SUBSEP $4
+        fragmentation[key] = $15
+        entries[key] = $16
+        admitted[key] = $19
+        peak[key] = $14
+        reserved[key] = $13
+    }
+    END {
+        for (position = 1; position <= 7; ++position) {
+            workload = order[position]
+            fixed8 = workload SUBSEP "fixed_8"
+            fixed64 = workload SUBSEP "fixed_64"
+            hetero = workload SUBSEP "hetero_8_64_with_promotion"
+            printf "%s,%.6f,%.6f,%.6f,%.6f\n",
+                workload,
+                100 * (entries[fixed8] - entries[hetero]) / entries[fixed8],
+                100 * (fragmentation[fixed64] - fragmentation[hetero]) / fragmentation[fixed64],
+                100 * (admitted[hetero] - admitted[fixed64]) / admitted[fixed64],
+                100 * (peak[hetero] - reserved[hetero]) / reserved[hetero]
+        }
+    }
+' "${result_directory}/summary.csv" \
+    > "${result_directory}/capacity_comparison.csv"
+
 {
     echo "schema_version=1"
     echo "source_commit=${source_commit}"
@@ -165,6 +195,10 @@ done < <(
         )"
     fi
 } > "${result_directory}/MANIFEST.txt"
+
+find "${result_directory}/cpu" "${result_directory}/cuda" \
+    -type f \( -name '*.json' -o -name '*.csv' \) -print0 \
+    | xargs -0 gzip -9
 
 (
     cd "${result_directory}"
