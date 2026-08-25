@@ -197,7 +197,7 @@ if(HETEROPAGE_KV_ENABLE_CUDA)
             $<$<COMPILE_LANGUAGE:CXX>:-Wall>
             $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
             $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
-            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra,-Wpedantic>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra>
     )
 
     target_link_libraries(

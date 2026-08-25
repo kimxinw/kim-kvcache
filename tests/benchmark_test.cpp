@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -21,6 +22,24 @@ void expect(bool condition, std::string const& message)
         std::cerr << "[FAILED] " << message << '\n';
         ++failures;
     }
+}
+
+std::size_t countOccurrences(
+    std::string_view text,
+    std::string_view needle)
+{
+    if (needle.empty()) {
+        return 0;
+    }
+
+    std::size_t count = 0;
+    std::size_t position = 0;
+    while ((position = text.find(needle, position))
+           != std::string_view::npos) {
+        ++count;
+        position += needle.size();
+    }
+    return count;
 }
 
 CapacityResult const* findCapacity(
@@ -258,6 +277,10 @@ void testCpuHarnessAndReports()
     expect(
         json_text.find("\"schema_version\": 1") != std::string::npos,
         "JSON schema version must be present"
+    );
+    expect(
+        countOccurrences(json_text, "\"seed\":") == 1,
+        "JSON config keys must not contain a duplicate seed"
     );
     expect(
         json_text.find("benchmark-contract") != std::string::npos,
