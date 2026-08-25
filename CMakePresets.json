@@ -1,0 +1,67 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release-base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON",
+        "HETEROPAGE_KV_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "cpu-release",
+      "displayName": "CPU Release",
+      "description": "Release build for CPU contracts and metadata benchmarks",
+      "inherits": "release-base",
+      "binaryDir": "${sourceDir}/build-k5-cpu-release",
+      "cacheVariables": {
+        "HETEROPAGE_KV_ENABLE_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "cuda-release",
+      "displayName": "CUDA Release (SM 86)",
+      "description": "Release build for the RTX 3060 CUDA baseline",
+      "inherits": "release-base",
+      "binaryDir": "${sourceDir}/build-k5-cuda-release",
+      "cacheVariables": {
+        "HETEROPAGE_KV_ENABLE_CUDA": "ON",
+        "CMAKE_CUDA_ARCHITECTURES": "86"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release"
+    },
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
