@@ -116,6 +116,8 @@ public:
     [[nodiscard]] bool checkInvariants() const;
 
 private:
+    struct InvariantCounters;
+
     struct RuntimeSlot final {
         PageState state{PageState::Free};
         std::uint32_t generation{0};
@@ -194,6 +196,21 @@ private:
     void resetFreedRuntimeLocked(RuntimeSlot& runtime) noexcept;
 
     [[nodiscard]] bool checkInvariantsLocked() const;
+
+    [[nodiscard]] bool checkRequestInvariantsLocked(
+        InvariantCounters& expected) const;
+
+    [[nodiscard]] bool checkPromotionInvariantsLocked(
+        InvariantCounters& expected) const;
+
+    [[nodiscard]] bool checkLeaseInvariantsLocked(
+        InvariantCounters& expected) const;
+
+    [[nodiscard]] bool checkPoolInvariantsLocked(
+        PageKind kind,
+        PagePool const& pool,
+        std::vector<RuntimeSlot> const& runtime_slots,
+        InvariantCounters const& expected) const;
 
     PagePool micro_pool_;
     PagePool extent_pool_;

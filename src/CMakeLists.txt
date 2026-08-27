@@ -4,6 +4,10 @@ add_library(
         core/block_table.cpp
         core/page_pool.cpp
         reference/kv_reference.cpp
+        runtime/kv_cache_append.cpp
+        runtime/kv_cache_inspection.cpp
+        runtime/kv_cache_invariants.cpp
+        runtime/kv_cache_lifecycle.cpp
         runtime/kv_cache_manager.cpp
         runtime/page_lease.cpp
         runtime/promotion.cpp

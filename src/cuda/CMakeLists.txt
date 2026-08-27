@@ -2,7 +2,13 @@ add_library(
     kim_kv_cuda
     STATIC
         cuda_kv_cache.cpp
-        cuda_kv_storage.cu
+        cuda_kv_append.cpp
+        cuda_kv_attention.cpp
+        cuda_kv_gather.cpp
+        cuda_kv_kernels.cu
+        cuda_kv_promotion.cpp
+        cuda_kv_storage.cpp
+        cuda_submission.cpp
 )
 
 set_target_properties(
