@@ -20,6 +20,16 @@ add_library(
     kim_kv_benchmark
     STATIC
         common/benchmark.cpp
+        common/capacity.cpp
+        common/command_line.cpp
+        common/cpu_benchmark.cpp
+        common/cpu_benchmark_fault.cpp
+        common/cpu_benchmark_independent.cpp
+        common/cpu_benchmark_sharing.cpp
+        common/cpu_benchmark_support.cpp
+        common/latency.cpp
+        common/report.cpp
+        common/workload.cpp
 )
 
 target_include_directories(
@@ -58,6 +68,11 @@ if(HETEROPAGE_KV_ENABLE_CUDA)
     add_executable(
         kim_kv_cuda_benchmark
         cuda/benchmark.cpp
+        cuda/benchmark_fault.cpp
+        cuda/benchmark_independent.cpp
+        cuda/benchmark_sharing.cpp
+        cuda/benchmark_support.cpp
+        cuda/benchmark_workload.cpp
         cuda/main.cpp
     )
 
