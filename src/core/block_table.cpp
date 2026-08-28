@@ -7,6 +7,63 @@
 #include <limits>
 
 namespace kimkvcache {
+namespace {
+
+[[nodiscard]] bool checkBlockTableInvariants(
+    std::vector<MappingEntry> const& entries,
+    std::uint16_t uniform_page_token_capacity)
+{
+    std::uint64_t expected_begin = 0;
+
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        MappingEntry const& entry = entries[index];
+
+        if (!entry.handle.isStructurallyValid()) {
+            return false;
+        }
+
+        if (entry.kind != entry.handle.kind) {
+            return false;
+        }
+
+        std::uint16_t const capacity = uniform_page_token_capacity == 0
+            ? pageTokenCapacity(entry.kind)
+            : uniform_page_token_capacity;
+
+        if (capacity == 0
+            || entry.valid_tokens == 0
+            || entry.valid_tokens > capacity) {
+            return false;
+        }
+
+        if (expected_begin >
+            std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+
+        if (entry.logical_token_begin != expected_begin) {
+            return false;
+        }
+
+        expected_begin += entry.valid_tokens;
+
+        if (expected_begin >
+            std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+
+        // 同一个请求不能用同一个物理页映射两个逻辑区间。
+        for (std::size_t previous = 0; previous < index; ++previous) {
+            if (entries[previous].handle == entry.handle) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+} // namespace
 
 std::uint64_t BlockTable::version() const noexcept
 {
@@ -59,52 +116,17 @@ MappingEntry const* BlockTable::find(
 
 bool BlockTable::checkInvariants() const
 {
-    std::uint64_t expected_begin = 0;
+    return checkBlockTableInvariants(entries_, 0);
+}
 
-    for (std::size_t index = 0; index < entries_.size(); ++index) {
-        MappingEntry const& entry = entries_[index];
-
-        if (!entry.handle.isStructurallyValid()) {
-            return false;
-        }
-
-        if (entry.kind != entry.handle.kind) {
-            return false;
-        }
-
-        std::uint16_t const capacity = pageTokenCapacity(entry.kind);
-
-        if (capacity == 0
-            || entry.valid_tokens == 0
-            || entry.valid_tokens > capacity) {
-            return false;
-        }
-
-        if (expected_begin >
-            std::numeric_limits<std::uint32_t>::max()) {
-            return false;
-        }
-
-        if (entry.logical_token_begin != expected_begin) {
-            return false;
-        }
-
-        expected_begin += entry.valid_tokens;
-
-        if (expected_begin >
-            std::numeric_limits<std::uint32_t>::max()) {
-            return false;
-        }
-
-        // 同一个请求不能用同一个物理页映射两个逻辑区间。
-        for (std::size_t previous = 0; previous < index; ++previous) {
-            if (entries_[previous].handle == entry.handle) {
-                return false;
-            }
-        }
-    }
-
-    return true;
+bool BlockTable::checkInvariants(
+    std::uint16_t uniform_page_token_capacity) const
+{
+    return uniform_page_token_capacity != 0
+        && checkBlockTableInvariants(
+            entries_,
+            uniform_page_token_capacity
+        );
 }
 
 } // namespace kimkvcache

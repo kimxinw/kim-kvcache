@@ -48,6 +48,14 @@ add_heteropage_kv_contract(
 )
 
 add_heteropage_kv_contract(
+    fixed_page_test
+    fixed_page_contract
+    runtime/fixed_page_test.cpp
+    10
+    kim_kv
+)
+
+add_heteropage_kv_contract(
     promotion_test
     promotion_contract
     runtime/promotion_test.cpp

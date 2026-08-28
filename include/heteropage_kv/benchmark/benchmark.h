@@ -221,6 +221,8 @@ struct BenchmarkReport final {
 struct CommandLineOptions final {
     BenchmarkConfig config{};
     std::vector<WorkloadKind> workloads{};
+    // 0 表示按 Hetero 双池运行时运行；非零表示启用固定页对照。
+    std::uint16_t fixed_page_tokens{0};
     std::string output_directory{"benchmarks/results"};
     bool show_help{false};
 };
@@ -258,6 +260,15 @@ struct CommandLineOptions final {
 [[nodiscard]] BenchmarkReport runCudaBenchmark(
     BenchmarkConfig const& config,
     std::vector<WorkloadKind> const& workloads
+);
+
+// K6 固定页运行时对照入口：以可执行 FixedPageManager 按 tokens_per_page
+// 运行同一批 Workload Trace，并输出实测容量探针结果。Fault 需要
+// Promotion 语义，固定页对照不接受该 Workload。
+[[nodiscard]] BenchmarkReport runCpuFixedBenchmark(
+    BenchmarkConfig const& config,
+    std::vector<WorkloadKind> const& workloads,
+    std::uint16_t tokens_per_page
 );
 
 [[nodiscard]] bool parseCommandLine(

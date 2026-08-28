@@ -1,5 +1,6 @@
 #include "heteropage_kv/benchmark/benchmark.h"
 
+#include <algorithm>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -112,6 +113,19 @@ bool parseCommandLine(
                 options.config.git_commit = nextValue();
             } else if (argument == "--output-dir") {
                 options.output_directory = nextValue();
+            } else if (argument == "--fixed-page-tokens") {
+                std::uint32_t const value = parseUint32(
+                    nextValue(),
+                    "--fixed-page-tokens"
+                );
+                if (value != 8 && value != 16
+                    && value != 32 && value != 64) {
+                    throw std::invalid_argument(
+                        "--fixed-page-tokens must be one of 8/16/32/64"
+                    );
+                }
+                options.fixed_page_tokens =
+                    static_cast<std::uint16_t>(value);
             } else if (argument == "--workload") {
                 std::string const value = nextValue();
                 if (value == "all") {
@@ -131,8 +145,27 @@ bool parseCommandLine(
             }
         }
 
-        if (options.workloads.empty()) {
+        bool const uses_default_workloads = options.workloads.empty();
+        if (uses_default_workloads) {
             options.workloads = allWorkloads();
+        }
+
+        if (options.fixed_page_tokens != 0) {
+            auto const fault = std::find(
+                options.workloads.begin(),
+                options.workloads.end(),
+                WorkloadKind::Fault
+            );
+            if (uses_default_workloads) {
+                if (fault != options.workloads.end()) {
+                    options.workloads.erase(fault);
+                }
+            } else if (fault != options.workloads.end()) {
+                throw std::invalid_argument(
+                    "fault workload requires promotion semantics and is "
+                    "not available for fixed-page baselines"
+                );
+            }
         }
         return validateConfig(options.config, error);
     } catch (std::exception const& exception) {
@@ -160,6 +193,9 @@ std::string benchmarkUsage(std::string_view program_name)
         << "  --head-dimension N       attention head dimension\n"
         << "  --git-commit HASH        override compiled Git revision\n"
         << "  --output-dir PATH        JSON/CSV destination directory\n"
+        << "  --fixed-page-tokens N    executable fixed-page baseline; "
+           "N=8|16|32|64\n"
+        << "                            default workloads exclude fault\n"
         << "  --help                    show this message\n";
     return output.str();
 }
