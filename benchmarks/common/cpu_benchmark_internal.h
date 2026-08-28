@@ -1,6 +1,7 @@
 #pragma once
 
 #include "heteropage_kv/benchmark/benchmark.h"
+#include "heteropage_kv/fixed/fixed_page_manager.h"
 #include "heteropage_kv/runtime/kv_cache_manager.h"
 
 #include <chrono>
@@ -64,6 +65,9 @@ void finalizeWorkload(
     KvCacheManager const& manager,
     Clock::time_point begin);
 
+// CPU 与固定页对照共用的环境信息收集。
+[[nodiscard]] EnvironmentInfo benchmarkEnvironment(BenchmarkConfig const& config);
+
 void attachTraceStatistics(
     WorkloadResult& result,
     WorkloadTrace const& trace);
@@ -92,5 +96,20 @@ void promoteEligibleRuns(
 [[nodiscard]] WorkloadResult runCpuWorkload(
     WorkloadTrace const& trace,
     BenchmarkConfig const& config);
+
+void finalizeFixedWorkload(
+    WorkloadResult& result,
+    FixedPageManager const& manager,
+    Clock::time_point begin);
+
+[[nodiscard]] CapacityResult runFixedCapacityProbe(
+    WorkloadTrace const& trace,
+    BenchmarkConfig const& config,
+    std::uint16_t tokens_per_page);
+
+[[nodiscard]] WorkloadResult runFixedWorkload(
+    WorkloadTrace const& trace,
+    BenchmarkConfig const& config,
+    std::uint16_t tokens_per_page);
 
 } // namespace kimkvcache::benchmark::cpu_detail

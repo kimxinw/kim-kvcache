@@ -1,11 +1,13 @@
 #include "heteropage_kv/benchmark/benchmark.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,6 +54,21 @@ CapacityResult const* findCapacity(
         }
     }
     return nullptr;
+}
+
+BaselineKind fixedBaseline(std::uint16_t tokens_per_page)
+{
+    switch (tokens_per_page) {
+    case 8:
+        return BaselineKind::Fixed8;
+    case 16:
+        return BaselineKind::Fixed16;
+    case 32:
+        return BaselineKind::Fixed32;
+    case 64:
+        return BaselineKind::Fixed64;
+    }
+    throw std::invalid_argument("unsupported fixed page size in test");
 }
 
 void testWorkloadGeneration()
@@ -297,6 +314,163 @@ void testCpuHarnessAndReports()
     std::filesystem::remove_all(directory);
 }
 
+void testFixedPageHarnessAndCommandLine()
+{
+    BenchmarkConfig config{};
+    config.request_count = 24;
+    config.concurrency = 4;
+    config.seed = 20260828;
+    config.git_commit = "fixed-page-contract";
+    config.capacity_budget_bytes = 1ULL << 30U;
+
+    std::vector<WorkloadKind> const workloads{
+        WorkloadKind::Short,
+        WorkloadKind::SharedPrompt,
+        WorkloadKind::ForkCow,
+    };
+
+    for (std::uint16_t const tokens_per_page : {8, 16, 32, 64}) {
+        BenchmarkReport const report = runCpuFixedBenchmark(
+            config,
+            workloads,
+            tokens_per_page
+        );
+
+        expect(report.successful(), "Fixed CPU smoke benchmark must succeed");
+        expect(
+            report.suite == "cpu_metadata_fixed_"
+                + std::to_string(tokens_per_page),
+            "Fixed report suite must encode its page size"
+        );
+        expect(report.workloads.size() == 3, "three Fixed workloads run");
+        expect(
+            report.capacity.size() == 3,
+            "one Fixed capacity row per workload"
+        );
+
+        for (std::size_t index = 0; index < report.capacity.size(); ++index) {
+            CapacityResult const& capacity = report.capacity[index];
+            expect(
+                capacity.micro_pages == 0 && capacity.extent_pages == 0,
+                "Fixed capacity rows must not masquerade as Hetero pages"
+            );
+            expect(
+                capacity.block_table_entries != 0,
+                "Fixed capacity rows expose page count through entries"
+            );
+
+            WorkloadTrace const trace = generateWorkload(
+                workloads[index],
+                config
+            );
+            std::vector<CapacityResult> const analytic = calculateCapacity(
+                trace,
+                config
+            );
+            CapacityResult const* expected = findCapacity(
+                analytic,
+                fixedBaseline(tokens_per_page)
+            );
+            expect(expected != nullptr, "matching analytic Fixed row exists");
+            if (expected != nullptr) {
+                expect(
+                    capacity.used_tokens == expected->used_tokens
+                        && capacity.reserved_tokens
+                            == expected->reserved_tokens
+                        && capacity.block_table_entries
+                            == expected->block_table_entries,
+                    "executable Fixed probe must match analytic accounting"
+                );
+            }
+        }
+
+        for (WorkloadResult const& result : report.workloads) {
+            expect(result.invariants_ok, "Fixed workload invariants hold");
+            expect(result.resources_released, "Fixed workload pool drains");
+            expect(
+                result.failed_operations == 0,
+                "Fixed workload has no unexpected failure"
+            );
+            expect(
+                result.completed_requests == config.request_count,
+                "Fixed workload completes the full trace"
+            );
+            expect(
+                result.requests_per_second > 0.0,
+                "Fixed workload reports non-zero throughput"
+            );
+        }
+    }
+
+    bool rejected_fault = false;
+    try {
+        static_cast<void>(runCpuFixedBenchmark(
+            config,
+            {WorkloadKind::Fault},
+            8
+        ));
+    } catch (std::invalid_argument const&) {
+        rejected_fault = true;
+    }
+    expect(rejected_fault, "Fixed runner must reject Fault workload");
+
+    char const* valid_argv[]{
+        "kim_kv_cpu_benchmark",
+        "--fixed-page-tokens",
+        "16",
+        "--workload",
+        "short",
+    };
+    CommandLineOptions valid_options{};
+    std::string valid_error;
+    expect(
+        parseCommandLine(5, valid_argv, valid_options, valid_error),
+        "Fixed CLI option must parse"
+    );
+    expect(
+        valid_options.fixed_page_tokens == 16
+            && valid_options.workloads.size() == 1
+            && valid_options.workloads.front() == WorkloadKind::Short,
+        "Fixed CLI must retain page size and explicit workload"
+    );
+
+    char const* default_argv[]{
+        "kim_kv_cpu_benchmark",
+        "--fixed-page-tokens",
+        "8",
+    };
+    CommandLineOptions default_options{};
+    std::string default_error;
+    expect(
+        parseCommandLine(3, default_argv, default_options, default_error),
+        "Fixed CLI defaults must parse"
+    );
+    expect(
+        default_options.workloads.size() == 6,
+        "Fixed CLI defaults must select six comparable workloads"
+    );
+    expect(
+        std::find(
+            default_options.workloads.begin(),
+            default_options.workloads.end(),
+            WorkloadKind::Fault
+        ) == default_options.workloads.end(),
+        "Fixed CLI defaults must exclude Fault"
+    );
+
+    char const* invalid_argv[]{
+        "kim_kv_cpu_benchmark",
+        "--fixed-page-tokens",
+        "12",
+    };
+    CommandLineOptions invalid_options{};
+    std::string invalid_error;
+    expect(
+        !parseCommandLine(3, invalid_argv, invalid_options, invalid_error),
+        "unsupported Fixed page size must be rejected by CLI"
+    );
+}
+
 } // namespace
 
 int main()
@@ -305,12 +479,13 @@ int main()
     testCapacityAccounting();
     testLatencySummary();
     testCpuHarnessAndReports();
+    testFixedPageHarnessAndCommandLine();
 
     if (failures != 0) {
         std::cerr << failures << " benchmark contract(s) failed\n";
         return 1;
     }
 
-    std::cout << "All K5 benchmark contracts passed\n";
+    std::cout << "All K5/K6 benchmark contracts passed\n";
     return 0;
 }

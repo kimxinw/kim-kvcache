@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace kimkvcache {
+    class FixedPageManager;
     class KvCacheManager;
 
     struct MappingEntry final {
@@ -55,8 +56,16 @@ namespace kimkvcache {
 
         [[nodiscard]] bool checkInvariants() const;
 
+        // Fixed Page Baseline 复用 BlockTable 的结构语义，但页容量由
+        // 运行时参数决定。该重载按统一容量校验每一个 MappingEntry；
+        // 无参版本仍按 PageKind 的标准 Micro/Extent 容量校验。
+        [[nodiscard]] bool checkInvariants(
+            std::uint16_t uniform_page_token_capacity
+        ) const;
+
     private:
         friend class KvCacheManager;
+        friend class FixedPageManager;
 
         std::vector<MappingEntry> entries_;
         std::uint64_t version_{0};

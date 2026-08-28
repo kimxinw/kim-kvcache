@@ -24,6 +24,7 @@ add_library(
         common/command_line.cpp
         common/cpu_benchmark.cpp
         common/cpu_benchmark_fault.cpp
+        common/cpu_benchmark_fixed.cpp
         common/cpu_benchmark_independent.cpp
         common/cpu_benchmark_sharing.cpp
         common/cpu_benchmark_support.cpp

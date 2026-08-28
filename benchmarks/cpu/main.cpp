@@ -22,16 +22,26 @@ int main(int argc, char const* const* argv)
     }
 
     try {
-        BenchmarkReport const report = runCpuBenchmark(
-            options.config,
-            options.workloads
-        );
+        BenchmarkReport const report = options.fixed_page_tokens == 0
+            ? runCpuBenchmark(
+                options.config,
+                options.workloads
+            )
+            : runCpuFixedBenchmark(
+                options.config,
+                options.workloads,
+                options.fixed_page_tokens
+            );
         std::filesystem::path const output_directory =
             options.output_directory;
-        std::string const json_path =
-            (output_directory / "cpu_metadata.json").string();
-        std::string const csv_path =
-            (output_directory / "cpu_metadata.csv").string();
+        std::string const suite_suffix = options.fixed_page_tokens == 0
+            ? std::string()
+            : std::string("_fixed_")
+                + std::to_string(options.fixed_page_tokens);
+        std::string const json_path = (output_directory / (
+            "cpu_metadata" + suite_suffix + ".json")).string();
+        std::string const csv_path = (output_directory / (
+            "cpu_metadata" + suite_suffix + ".csv")).string();
 
         writeJsonReport(report, json_path);
         writeCsvReport(report, csv_path);

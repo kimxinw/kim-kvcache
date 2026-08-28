@@ -20,6 +20,11 @@ int main(int argc, char const* const* argv)
         std::cout << benchmarkUsage(argv[0]);
         return 0;
     }
+    if (options.fixed_page_tokens != 0) {
+        std::cerr
+            << "error: --fixed-page-tokens is currently CPU-only\n";
+        return 2;
+    }
 
     try {
         BenchmarkReport const report = runCudaBenchmark(
