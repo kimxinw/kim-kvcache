@@ -39,7 +39,7 @@ CudaSubmission CudaKvStorage::gatherAsync(
                 impl_->pagePointer(entry.handle),
                 entry.logical_token_begin,
                 entry.valid_tokens,
-                pageTokenCapacity(entry.kind),
+                impl_->pageTokenCapacity(entry.kind),
             });
         }
     } catch (...) {

@@ -5,7 +5,7 @@
 namespace kimkvcache::benchmark::detail {
 
 void runFaultIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     BenchmarkStream const& stream,
     GpuTimer& timer,

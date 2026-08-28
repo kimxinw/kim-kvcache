@@ -86,11 +86,10 @@ void attachTraceStatistics(
     );
 }
 
-} // namespace
-
-BenchmarkReport runCudaBenchmark(
+[[nodiscard]] BenchmarkReport runCudaBenchmarkImpl(
     BenchmarkConfig const& config,
-    std::vector<WorkloadKind> const& workloads)
+    std::vector<WorkloadKind> const& workloads,
+    std::uint16_t fixed_page_tokens)
 {
     std::string error;
     if (!validateConfig(config, error)) {
@@ -99,9 +98,30 @@ BenchmarkReport runCudaBenchmark(
     if (workloads.empty()) {
         throw std::invalid_argument("at least one CUDA workload is required");
     }
+    if (fixed_page_tokens != 0
+        && fixed_page_tokens != 8
+        && fixed_page_tokens != 16
+        && fixed_page_tokens != 32
+        && fixed_page_tokens != 64) {
+        throw std::invalid_argument(
+            "Fixed CUDA page tokens must be one of 8/16/32/64"
+        );
+    }
+    if (fixed_page_tokens != 0
+        && std::find(
+            workloads.begin(),
+            workloads.end(),
+            WorkloadKind::Fault
+        ) != workloads.end()) {
+        throw std::invalid_argument(
+            "Fixed CUDA benchmark does not support fault workload"
+        );
+    }
 
     BenchmarkReport report{};
-    report.suite = "cuda_data_path";
+    report.suite = fixed_page_tokens == 0
+        ? "cuda_data_path"
+        : "cuda_data_path_fixed_" + std::to_string(fixed_page_tokens);
     report.config = config;
     if (report.config.git_commit.empty()) {
         report.config.git_commit = defaultGitCommit();
@@ -117,11 +137,32 @@ BenchmarkReport runCudaBenchmark(
             capacity.begin(),
             capacity.end()
         );
-        WorkloadResult result = detail::runCudaWorkload(workload, report.config);
+        WorkloadResult result = detail::runCudaWorkload(
+            workload,
+            report.config,
+            fixed_page_tokens
+        );
         attachTraceStatistics(result, trace);
         report.workloads.push_back(std::move(result));
     }
     return report;
+}
+
+} // namespace
+
+BenchmarkReport runCudaBenchmark(
+    BenchmarkConfig const& config,
+    std::vector<WorkloadKind> const& workloads)
+{
+    return runCudaBenchmarkImpl(config, workloads, 0);
+}
+
+BenchmarkReport runCudaFixedBenchmark(
+    BenchmarkConfig const& config,
+    std::vector<WorkloadKind> const& workloads,
+    std::uint16_t tokens_per_page)
+{
+    return runCudaBenchmarkImpl(config, workloads, tokens_per_page);
 }
 
 } // namespace kimkvcache::benchmark

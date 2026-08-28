@@ -18,6 +18,8 @@ using CudaStream = void*;
 struct CudaStorageSnapshot final {
     std::uint32_t micro_capacity{0};
     std::uint32_t extent_capacity{0};
+    std::uint16_t micro_page_tokens{kMicroPageTokenCapacity};
+    std::uint16_t extent_page_tokens{kExtentPageTokenCapacity};
     std::size_t micro_reserved_bytes{0};
     std::size_t extent_reserved_bytes{0};
 
@@ -64,7 +66,9 @@ public:
     CudaKvStorage(
         KvLayout layout,
         std::uint32_t micro_capacity,
-        std::uint32_t extent_capacity
+        std::uint32_t extent_capacity,
+        std::uint16_t micro_page_tokens = kMicroPageTokenCapacity,
+        std::uint16_t extent_page_tokens = kExtentPageTokenCapacity
     ) noexcept;
 
     ~CudaKvStorage();

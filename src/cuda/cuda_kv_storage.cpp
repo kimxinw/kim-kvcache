@@ -11,10 +11,10 @@ namespace {
 
 [[nodiscard]] std::size_t pageElements(
     KvLayout const& layout,
-    PageKind kind) noexcept
+    std::uint16_t token_capacity) noexcept
 {
     std::size_t result = 0;
-    return layout.pageElements(kind, result) ? result : 0;
+    return layout.elementsForTokens(token_capacity, result) ? result : 0;
 }
 
 } // namespace
@@ -67,9 +67,24 @@ KvScalar* CudaKvStorage::Impl::pagePointer(
     return nullptr;
 }
 
+std::uint16_t CudaKvStorage::Impl::pageTokenCapacity(
+    PageKind kind) const noexcept
+{
+    return kind == PageKind::Micro
+        ? micro_page_tokens
+        : extent_page_tokens;
+}
+
 bool CudaKvStorage::Impl::validTable(BlockTable const& table) const noexcept
 {
-    if (!table.checkInvariants()) {
+    bool const standard_layout =
+        micro_page_tokens == kMicroPageTokenCapacity
+        && extent_page_tokens == kExtentPageTokenCapacity;
+    bool const valid_structure = standard_layout
+        ? table.checkInvariants()
+        : extent_capacity == 0
+            && table.checkInvariants(micro_page_tokens);
+    if (!valid_structure) {
         return false;
     }
     return std::all_of(
@@ -84,7 +99,9 @@ bool CudaKvStorage::Impl::validTable(BlockTable const& table) const noexcept
 CudaKvStorage::CudaKvStorage(
     KvLayout layout,
     std::uint32_t micro_capacity,
-    std::uint32_t extent_capacity) noexcept
+    std::uint32_t extent_capacity,
+    std::uint16_t micro_page_tokens,
+    std::uint16_t extent_page_tokens) noexcept
 {
     try {
         impl_ = std::make_shared<Impl>();
@@ -95,10 +112,14 @@ CudaKvStorage::CudaKvStorage(
     impl_->layout = layout;
     impl_->micro_capacity = micro_capacity;
     impl_->extent_capacity = extent_capacity;
-    impl_->micro_page_elements = pageElements(layout, PageKind::Micro);
-    impl_->extent_page_elements = pageElements(layout, PageKind::Extent);
+    impl_->micro_page_tokens = micro_page_tokens;
+    impl_->extent_page_tokens = extent_page_tokens;
+    impl_->micro_page_elements = pageElements(layout, micro_page_tokens);
+    impl_->extent_page_elements = pageElements(layout, extent_page_tokens);
 
     if (!layout.valid()
+        || micro_page_tokens == 0
+        || extent_page_tokens == 0
         || impl_->micro_page_elements == 0
         || impl_->extent_page_elements == 0) {
         impl_->initialization_status = CudaStatus{
@@ -190,6 +211,8 @@ CudaStorageSnapshot CudaKvStorage::snapshot() const noexcept
     return CudaStorageSnapshot{
         impl_->micro_capacity,
         impl_->extent_capacity,
+        impl_->micro_page_tokens,
+        impl_->extent_page_tokens,
         impl_->micro_reserved_bytes,
         impl_->extent_reserved_bytes,
     };

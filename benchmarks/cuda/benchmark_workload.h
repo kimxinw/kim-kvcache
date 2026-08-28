@@ -2,17 +2,70 @@
 
 #include "heteropage_kv/benchmark/benchmark.h"
 #include "heteropage_kv/cuda/cuda_kv_cache.h"
+#include "heteropage_kv/cuda/fixed_cuda_kv_cache.h"
 
 #include <cuda_runtime_api.h>
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace kimkvcache::benchmark::detail {
+
+class CudaBenchmarkCache final {
+public:
+    CudaBenchmarkCache(
+        BenchmarkConfig const& config,
+        std::uint16_t fixed_page_tokens
+    );
+
+    [[nodiscard]] bool fixed() const noexcept;
+    [[nodiscard]] bool supportsPromotion() const noexcept;
+    [[nodiscard]] CudaStatus status() const noexcept;
+    [[nodiscard]] KvCacheError createRequest(RequestId request_id);
+    [[nodiscard]] KvCacheError sealTail(RequestId request_id);
+    [[nodiscard]] KvCacheError forkRequest(
+        RequestId source_request_id,
+        RequestId child_request_id
+    );
+    [[nodiscard]] KvCacheError releaseRequest(RequestId request_id);
+    [[nodiscard]] CudaKvOperationResult append(
+        RequestId request_id,
+        std::uint32_t token_count,
+        KvScalar const* device_input,
+        CudaStream stream
+    );
+    [[nodiscard]] CudaKvOperationResult promote(
+        RequestId request_id,
+        std::uint32_t logical_token_begin,
+        CudaStream stream
+    );
+    [[nodiscard]] CudaKvOperationResult gather(
+        RequestId request_id,
+        KvScalar* device_output,
+        CudaStream stream
+    );
+    [[nodiscard]] CudaKvOperationResult referenceAttention(
+        RequestId request_id,
+        float const* device_query,
+        float* device_output,
+        CudaStream stream
+    );
+    [[nodiscard]] std::optional<BlockTable> blockTable(
+        RequestId request_id) const;
+    [[nodiscard]] bool checkInvariants() const;
+    [[nodiscard]] bool resourcesReleased() const;
+    void injectFailureOnce(CudaFailurePoint point) noexcept;
+
+private:
+    std::unique_ptr<CudaKvCache> hetero_{};
+    std::unique_ptr<FixedCudaKvCache> fixed_{};
+};
 
 template <typename T>
 class DeviceBuffer final {
@@ -193,7 +246,7 @@ void recordReleaseFailure(
     bool measured);
 
 void runIndependentIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     DeviceBuffer<KvScalar>& output,
     DeviceBuffer<float>& query,
@@ -208,7 +261,7 @@ void runIndependentIteration(
     bool measured);
 
 void runSharedIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     DeviceBuffer<KvScalar>& output,
     BenchmarkStream const& stream,
@@ -220,7 +273,7 @@ void runSharedIteration(
     bool measured);
 
 void runForkCowIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     DeviceBuffer<KvScalar>& output,
     BenchmarkStream const& stream,
@@ -232,7 +285,7 @@ void runForkCowIteration(
     bool measured);
 
 void runFaultIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     BenchmarkStream const& stream,
     GpuTimer& timer,
@@ -244,6 +297,7 @@ void runFaultIteration(
 
 [[nodiscard]] WorkloadResult runCudaWorkload(
     WorkloadKind workload,
-    BenchmarkConfig const& config);
+    BenchmarkConfig const& config,
+    std::uint16_t fixed_page_tokens = 0);
 
 } // namespace kimkvcache::benchmark::detail

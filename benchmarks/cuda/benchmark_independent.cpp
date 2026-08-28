@@ -3,7 +3,7 @@
 namespace kimkvcache::benchmark::detail {
 
 void runIndependentIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     DeviceBuffer<KvScalar>& output,
     DeviceBuffer<float>& query,
@@ -53,29 +53,31 @@ void runIndependentIteration(
     );
 
     if (append_result.ok()) {
-        std::uint32_t const promotable =
-            length / kExtentPageTokenCapacity
-            * kExtentPageTokenCapacity;
-        for (std::uint32_t logical_begin = 0;
-             logical_begin < promotable;
-             logical_begin += kExtentPageTokenCapacity) {
-            static_cast<void>(recordCudaOperation(
-                result,
-                timer,
-                stream,
-                OperationKind::Promote,
-                kExtentPageTokenCapacity,
-                bytesForTokens(config, kExtentPageTokenCapacity),
-                measured,
-                true,
-                [&cache, &stream, request_id, logical_begin]() {
-                    return cache.promote(
-                        request_id,
-                        logical_begin,
-                        stream.opaque()
-                    );
-                }
-            ));
+        if (cache.supportsPromotion()) {
+            std::uint32_t const promotable =
+                length / kExtentPageTokenCapacity
+                * kExtentPageTokenCapacity;
+            for (std::uint32_t logical_begin = 0;
+                 logical_begin < promotable;
+                 logical_begin += kExtentPageTokenCapacity) {
+                static_cast<void>(recordCudaOperation(
+                    result,
+                    timer,
+                    stream,
+                    OperationKind::Promote,
+                    kExtentPageTokenCapacity,
+                    bytesForTokens(config, kExtentPageTokenCapacity),
+                    measured,
+                    true,
+                    [&cache, &stream, request_id, logical_begin]() {
+                        return cache.promote(
+                            request_id,
+                            logical_begin,
+                            stream.opaque()
+                        );
+                    }
+                ));
+            }
         }
 
         static_cast<void>(recordCudaOperation(

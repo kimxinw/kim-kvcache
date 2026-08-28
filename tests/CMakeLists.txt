@@ -88,6 +88,31 @@ if(HETEROPAGE_KV_ENABLE_CUDA)
         kim_kv_cuda
         CUDA::cudart
     )
+
+    if(HETEROPAGE_KV_BUILD_BENCHMARKS)
+        foreach(fixed_page_tokens IN ITEMS 8 16 32 64)
+            add_test(
+                NAME fixed_cuda_benchmark_smoke_${fixed_page_tokens}
+                COMMAND
+                    kim_kv_cuda_benchmark
+                    --workload short
+                    --fixed-page-tokens ${fixed_page_tokens}
+                    --warmup 0
+                    --iterations 1
+                    --max-sequence-length 65
+                    --layers 2
+                    --kv-heads 2
+                    --head-dimension 8
+                    --output-dir
+                    ${CMAKE_CURRENT_BINARY_DIR}/fixed_cuda_${fixed_page_tokens}
+            )
+            set_tests_properties(
+                fixed_cuda_benchmark_smoke_${fixed_page_tokens}
+                PROPERTIES
+                    TIMEOUT 30
+            )
+        endforeach()
+    endif()
 endif()
 
 if(HETEROPAGE_KV_BUILD_BENCHMARKS)

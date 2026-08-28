@@ -262,6 +262,14 @@ struct CommandLineOptions final {
     std::vector<WorkloadKind> const& workloads
 );
 
+// K6 Fixed CUDA 对照入口：真实执行参数化固定页 Storage、Append/COW、
+// Gather 与 Reference Attention。固定页没有 Promotion/Fault 语义。
+[[nodiscard]] BenchmarkReport runCudaFixedBenchmark(
+    BenchmarkConfig const& config,
+    std::vector<WorkloadKind> const& workloads,
+    std::uint16_t tokens_per_page
+);
+
 // K6 固定页运行时对照入口：以可执行 FixedPageManager 按 tokens_per_page
 // 运行同一批 Workload Trace，并输出实测容量探针结果。Fault 需要
 // Promotion 语义，固定页对照不接受该 Workload。

@@ -73,7 +73,7 @@ CudaSubmission CudaKvStorage::appendAsync(
         if (!is_tail
             || old_entry.kind != PageKind::Micro
             || replacement->kind != PageKind::Micro
-            || old_entry.valid_tokens >= kMicroPageTokenCapacity
+            || old_entry.valid_tokens >= impl_->micro_page_tokens
             || replacement->valid_tokens < old_entry.valid_tokens) {
             operation->submission_status = CudaStatus{
                 CudaError::InvalidArgument,
@@ -91,9 +91,9 @@ CudaSubmission CudaKvStorage::appendAsync(
         );
         cuda_detail::launchCopyPageTokens(
             impl_->pagePointer(old_entry.handle),
-            kMicroPageTokenCapacity,
+            impl_->micro_page_tokens,
             impl_->pagePointer(replacement->handle),
-            kMicroPageTokenCapacity,
+            impl_->micro_page_tokens,
             old_entry.valid_tokens,
             layout,
             elements,
@@ -126,7 +126,7 @@ CudaSubmission CudaKvStorage::appendAsync(
             token_count,
             segment_begin - append_token_begin,
             impl_->pagePointer(entry.handle),
-            pageTokenCapacity(entry.kind),
+            impl_->pageTokenCapacity(entry.kind),
             segment_begin - entry.logical_token_begin,
             segment_tokens,
             layout,

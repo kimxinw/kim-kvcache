@@ -20,23 +20,24 @@ int main(int argc, char const* const* argv)
         std::cout << benchmarkUsage(argv[0]);
         return 0;
     }
-    if (options.fixed_page_tokens != 0) {
-        std::cerr
-            << "error: --fixed-page-tokens is currently CPU-only\n";
-        return 2;
-    }
-
     try {
-        BenchmarkReport const report = runCudaBenchmark(
-            options.config,
-            options.workloads
-        );
+        BenchmarkReport const report = options.fixed_page_tokens == 0
+            ? runCudaBenchmark(options.config, options.workloads)
+            : runCudaFixedBenchmark(
+                options.config,
+                options.workloads,
+                options.fixed_page_tokens
+            );
         std::filesystem::path const output_directory =
             options.output_directory;
+        std::string const stem = options.fixed_page_tokens == 0
+            ? "cuda_data_path"
+            : "cuda_data_path_fixed_"
+                + std::to_string(options.fixed_page_tokens);
         std::string const json_path =
-            (output_directory / "cuda_data_path.json").string();
+            (output_directory / (stem + ".json")).string();
         std::string const csv_path =
-            (output_directory / "cuda_data_path.csv").string();
+            (output_directory / (stem + ".csv")).string();
 
         writeJsonReport(report, json_path);
         writeCsvReport(report, csv_path);

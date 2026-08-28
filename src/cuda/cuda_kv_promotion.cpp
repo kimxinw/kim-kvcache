@@ -15,7 +15,9 @@ CudaSubmission CudaKvStorage::promoteAsync(
         return CudaSubmission(std::move(operation));
     }
 
-    if (!promotion.ok()
+    if (impl_->micro_page_tokens != kMicroPageTokenCapacity
+        || impl_->extent_page_tokens != kExtentPageTokenCapacity
+        || !promotion.ok()
         || promotion.target_handle.kind != PageKind::Extent
         || impl_->pagePointer(promotion.target_handle) == nullptr) {
         operation->submission_status = CudaStatus{

@@ -7,6 +7,7 @@
 #include "heteropage_kv/cuda/cuda_kv_cache.h"
 #include "heteropage_kv/cuda/cuda_kv_storage.h"
 #include "heteropage_kv/cuda/cuda_status.h"
+#include "heteropage_kv/cuda/fixed_cuda_kv_cache.h"
 #include "heteropage_kv/fixed/fixed_page_manager.h"
 #include "heteropage_kv/heteropage_kv.h"
 #include "heteropage_kv/reference/kv_layout.h"

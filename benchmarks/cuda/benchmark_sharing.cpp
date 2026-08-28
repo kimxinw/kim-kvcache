@@ -8,7 +8,7 @@
 namespace kimkvcache::benchmark::detail {
 
 void runSharedIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     DeviceBuffer<KvScalar>& output,
     BenchmarkStream const& stream,
@@ -106,7 +106,7 @@ void runSharedIteration(
 }
 
 void runForkCowIteration(
-    CudaKvCache& cache,
+    CudaBenchmarkCache& cache,
     DeviceBuffer<KvScalar>& input,
     DeviceBuffer<KvScalar>& output,
     BenchmarkStream const& stream,

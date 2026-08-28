@@ -9,6 +9,7 @@ add_library(
         cuda_kv_promotion.cpp
         cuda_kv_storage.cpp
         cuda_submission.cpp
+        fixed_cuda_kv_cache.cpp
 )
 
 set_target_properties(

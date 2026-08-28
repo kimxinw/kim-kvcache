@@ -1,4 +1,5 @@
 #include "heteropage_kv/cuda/cuda_kv_cache.h"
+#include "heteropage_kv/cuda/fixed_cuda_kv_cache.h"
 #include "heteropage_kv/reference/kv_reference.h"
 
 #include <cuda_runtime_api.h>
@@ -169,8 +170,9 @@ private:
     return result;
 }
 
+template <typename Cache>
 [[nodiscard]] bool appendChunk(
-    CudaKvCache& cache,
+    Cache& cache,
     KvLayout const& layout,
     RequestId request_id,
     std::uint32_t logical_begin,
@@ -196,8 +198,9 @@ private:
     return result.ok();
 }
 
+template <typename Cache>
 void expectGather(
-    CudaKvCache& cache,
+    Cache& cache,
     KvLayout const& layout,
     RequestId request_id,
     std::uint32_t token_count,
@@ -220,6 +223,64 @@ void expectGather(
     std::vector<KvScalar> actual;
     expect(output.download(actual), message + ": output download");
     expect(actual == expected, message + ": byte-exact FP16 data");
+}
+
+template <typename Cache>
+void expectAttention(
+    Cache& cache,
+    KvLayout const& layout,
+    RequestId request_id,
+    std::uint32_t token_count,
+    std::vector<KvScalar> const& contiguous_kv,
+    CudaStream stream,
+    std::string const& message)
+{
+    std::size_t const query_elements =
+        static_cast<std::size_t>(layout.layer_count)
+        * layout.kv_head_count
+        * layout.head_dimension;
+    std::vector<float> query(query_elements);
+    for (std::size_t index = 0; index < query.size(); ++index) {
+        query[index] = static_cast<float>((index % 11) + 1) * 0.03125F;
+    }
+
+    std::vector<float> reference;
+    expect(
+        referenceAttention(
+            layout,
+            contiguous_kv,
+            token_count,
+            query,
+            reference
+        ),
+        message + ": CPU reference"
+    );
+
+    DeviceBuffer<float> device_query(query.size());
+    DeviceBuffer<float> device_output(query.size());
+    expect(
+        device_query.ok() && device_output.ok(),
+        message + ": device buffers"
+    );
+    expect(device_query.upload(query), message + ": query upload");
+
+    CudaKvOperationResult const attention = cache.referenceAttention(
+        request_id,
+        device_query.data(),
+        device_output.data(),
+        stream
+    );
+    expect(attention.ok(), message + ": CUDA attention");
+
+    std::vector<float> actual;
+    expect(device_output.download(actual), message + ": output download");
+    expect(actual.size() == reference.size(), message + ": output size");
+    if (actual.size() == reference.size()) {
+        for (std::size_t index = 0; index < actual.size(); ++index) {
+            float const error = std::abs(actual[index] - reference[index]);
+            expect(error <= 5.0e-4F, message + ": reference tolerance");
+        }
+    }
 }
 
 void testAppendGatherPromotionAndAttention(
@@ -281,43 +342,7 @@ void testAppendGatherPromotionAndAttention(
         "post-promotion gather"
     );
 
-    std::size_t const query_elements =
-        static_cast<std::size_t>(layout.layer_count)
-        * layout.kv_head_count
-        * layout.head_dimension;
-    std::vector<float> query(query_elements);
-    for (std::size_t index = 0; index < query.size(); ++index) {
-        query[index] = static_cast<float>((index % 11) + 1) * 0.03125F;
-    }
-
-    std::vector<float> reference;
-    expect(
-        referenceAttention(layout, expected, 64, query, reference),
-        "CPU Reference Attention succeeds"
-    );
-
-    DeviceBuffer<float> device_query(query.size());
-    DeviceBuffer<float> device_output(query.size());
-    expect(device_query.ok() && device_output.ok(), "attention buffers");
-    expect(device_query.upload(query), "attention query upload");
-
-    CudaKvOperationResult const attention = cache.referenceAttention(
-        1,
-        device_query.data(),
-        device_output.data(),
-        stream
-    );
-    expect(attention.ok(), "CUDA Reference Attention succeeds");
-
-    std::vector<float> actual;
-    expect(device_output.download(actual), "attention output download");
-    expect(actual.size() == reference.size(), "attention output size");
-    if (actual.size() == reference.size()) {
-        for (std::size_t index = 0; index < actual.size(); ++index) {
-            float const error = std::abs(actual[index] - reference[index]);
-            expect(error <= 5.0e-4F, "attention reference tolerance");
-        }
-    }
+    expectAttention(cache, layout, 1, 64, expected, stream, "hetero");
 
     expect(cache.checkInvariants(), "K4 main path invariants");
     expect(cache.releaseRequest(1) == KvCacheError::None, "release request 1");
@@ -480,6 +505,154 @@ void testCancellationDuringPromotionIo(
     expect(manager.checkInvariants(), "cancellation race invariants");
 }
 
+void testFixedCudaPages(KvLayout const& layout, CudaStream stream)
+{
+    constexpr std::uint16_t kPageSizes[]{8, 16, 32, 64};
+    std::size_t token_bytes = 0;
+    static_cast<void>(layout.bytesForTokens(1, token_bytes));
+
+    for (std::uint16_t const page_tokens : kPageSizes) {
+        FixedCudaKvCache cache(layout, page_tokens, 24);
+        std::string const label = "Fixed-" + std::to_string(page_tokens);
+        expect(cache.status().ok(), label + ": initialization");
+        expect(cache.tokensPerPage() == page_tokens, label + ": page tokens");
+
+        CudaStorageSnapshot const storage = cache.storageSnapshot();
+        expect(
+            storage.micro_page_tokens == page_tokens,
+            label + ": storage page tokens"
+        );
+        expect(storage.extent_capacity == 0, label + ": no extent pool");
+        expect(
+            storage.micro_reserved_bytes
+                == 24ULL * page_tokens * token_bytes,
+            label + ": allocation accounting"
+        );
+
+        RequestId const request_id = 100 + page_tokens;
+        std::uint32_t const first = page_tokens - 1;
+        std::uint32_t const second = page_tokens + 4;
+        std::uint32_t const total = first + second;
+        expect(
+            cache.createRequest(request_id) == KvCacheError::None,
+            label + ": create"
+        );
+        if (!appendChunk(
+                cache,
+                layout,
+                request_id,
+                0,
+                first,
+                stream
+            )
+            || !appendChunk(
+                cache,
+                layout,
+                request_id,
+                first,
+                second,
+                stream
+            )) {
+            continue;
+        }
+
+        std::vector<KvScalar> const expected = makeKv(layout, 0, total);
+        expectGather(
+            cache,
+            layout,
+            request_id,
+            total,
+            expected,
+            stream,
+            label + ": multi-page gather"
+        );
+        expectAttention(
+            cache,
+            layout,
+            request_id,
+            total,
+            expected,
+            stream,
+            label + ": attention"
+        );
+
+        RequestId const child_id = request_id + 1'000;
+        expect(
+            cache.forkRequest(request_id, child_id) == KvCacheError::None,
+            label + ": fork"
+        );
+        if (appendChunk(
+                cache,
+                layout,
+                child_id,
+                total,
+                1,
+                stream
+            )) {
+            expectGather(
+                cache,
+                layout,
+                request_id,
+                total,
+                expected,
+                stream,
+                label + ": parent after COW"
+            );
+            expectGather(
+                cache,
+                layout,
+                child_id,
+                total + 1,
+                makeKv(layout, 0, total + 1),
+                stream,
+                label + ": child after COW"
+            );
+        }
+
+        expect(cache.checkInvariants(), label + ": active invariants");
+        expect(
+            cache.releaseRequest(child_id) == KvCacheError::None,
+            label + ": release child"
+        );
+        expect(
+            cache.releaseRequest(request_id) == KvCacheError::None,
+            label + ": release parent"
+        );
+        FixedPageManagerSnapshot const metadata = cache.metadataSnapshot();
+        expect(metadata.request_count == 0, label + ": no requests");
+        expect(
+            metadata.pool.allocated_slots == 0,
+            label + ": no allocated pages"
+        );
+        expect(cache.checkInvariants(), label + ": cleanup invariants");
+    }
+
+    FixedCudaKvCache failure_cache(layout, 8, 4);
+    expect(
+        failure_cache.createRequest(9'000) == KvCacheError::None,
+        "Fixed failure: create"
+    );
+    std::vector<KvScalar> const one_token = makeKv(layout, 0, 1);
+    DeviceBuffer<KvScalar> input(one_token.size());
+    expect(input.ok() && input.upload(one_token), "Fixed failure: upload");
+    failure_cache.injectFailureOnce(CudaFailurePoint::Completion);
+    CudaKvOperationResult const failure = failure_cache.append(
+        9'000,
+        1,
+        input.data(),
+        stream
+    );
+    expect(
+        failure.cuda_status.error == CudaError::ExecutionFailed,
+        "Fixed failure: completion error"
+    );
+    expect(
+        !failure_cache.blockTable(9'000).has_value(),
+        "Fixed failure: unsafe request cancelled"
+    );
+    expect(failure_cache.checkInvariants(), "Fixed failure: invariants");
+}
+
 } // namespace
 
 int main()
@@ -502,12 +675,13 @@ int main()
     testPartialTailCow(layout, stream.get());
     testFaultRollback(layout, stream.get());
     testCancellationDuringPromotionIo(layout, stream.get());
+    testFixedCudaPages(layout, stream.get());
 
     if (failures != 0) {
         std::cerr << failures << " test assertion(s) failed\n";
         return 1;
     }
 
-    std::cout << "All CUDA Storage/K4 correctness tests passed\n";
+    std::cout << "All Hetero/K4 and Fixed/K6 CUDA tests passed\n";
     return 0;
 }

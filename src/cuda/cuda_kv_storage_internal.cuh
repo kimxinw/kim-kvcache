@@ -17,6 +17,8 @@ struct CudaKvStorage::Impl final {
     KvLayout layout{};
     std::uint32_t micro_capacity{0};
     std::uint32_t extent_capacity{0};
+    std::uint16_t micro_page_tokens{kMicroPageTokenCapacity};
+    std::uint16_t extent_page_tokens{kExtentPageTokenCapacity};
     std::size_t micro_page_elements{0};
     std::size_t extent_page_elements{0};
     std::size_t micro_reserved_bytes{0};
@@ -35,6 +37,9 @@ struct CudaKvStorage::Impl final {
 
     [[nodiscard]] KvScalar* pagePointer(
         PageHandle handle) const noexcept;
+
+    [[nodiscard]] std::uint16_t pageTokenCapacity(
+        PageKind kind) const noexcept;
 
     [[nodiscard]] bool validTable(
         BlockTable const& table) const noexcept;
