@@ -35,12 +35,20 @@ cuda_compiler="${CUDACXX:-}"
 if [[ -z "${cuda_compiler}" ]] && command -v nvcc >/dev/null 2>&1; then
     cuda_compiler="$(command -v nvcc)"
 fi
-if [[ -z "${cuda_compiler}" ]] \
-    && [[ -f build-k5-cuda-release/CMakeCache.txt ]]; then
-    cuda_compiler="$(
-        sed -n 's/^CMAKE_CUDA_COMPILER:[^=]*=//p' \
-            build-k5-cuda-release/CMakeCache.txt | head -n 1
-    )"
+if [[ -z "${cuda_compiler}" ]]; then
+    for cache_path in \
+        build-k5-cuda-release/CMakeCache.txt \
+        build-impl-units-cuda/CMakeCache.txt; do
+        if [[ -f "${cache_path}" ]]; then
+            cuda_compiler="$(
+                sed -n 's/^CMAKE_CUDA_COMPILER:[^=]*=//p' \
+                    "${cache_path}" | head -n 1
+            )"
+        fi
+        if [[ -n "${cuda_compiler}" ]]; then
+            break
+        fi
+    done
 fi
 if [[ -z "${cuda_compiler}" ]] || [[ ! -x "${cuda_compiler}" ]]; then
     echo "error: CUDA compiler not found" >&2
