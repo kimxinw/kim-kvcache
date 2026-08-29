@@ -19,7 +19,7 @@ readonly cuda_device="${KIM_KV_CUDA_DEVICE:-0}"
 readonly benchmark_seed="${KIM_KV_BENCHMARK_SEED:-0x4B564341434845}"
 readonly maximum_sequence_length="${KIM_KV_MAX_SEQUENCE_LENGTH:-544}"
 readonly nsys_iterations="${KIM_KV_NSYS_ITERATIONS:-3}"
-readonly ncu_launch_count="${KIM_KV_NCU_LAUNCH_COUNT:-24}"
+readonly ncu_launch_count="${KIM_KV_NCU_LAUNCH_COUNT:-4}"
 
 case "${profile_component}" in
     all)
@@ -163,40 +163,58 @@ profile_variant()
     fi
 
     if [[ "${run_ncu}" == true ]]; then
-        mkdir -p "${output}/ncu_run"
-        echo "Running Nsight Compute: ${variant}/long"
-        CUDA_VISIBLE_DEVICES="${cuda_device}" \
-            "${ncu_bin}" \
-            --target-processes all \
-            --set basic \
-            --launch-count "${ncu_launch_count}" \
-            --export "${output}/kernels" \
-            --force-overwrite \
-            --csv \
-            --log-file "${output}/ncu.csv" \
-            "${benchmark}" \
-            --workload long \
-            --seed "${benchmark_seed}" \
-            --requests 10000 \
-            --max-sequence-length "${maximum_sequence_length}" \
-            --warmup 0 \
-            --iterations 1 \
-            --git-commit "${source_commit}" \
-            --output-dir "${output}/ncu_run" \
-            "${fixed_arguments[@]}" \
-            >"${output}/ncu.log" 2>&1
-
-        "${ncu_bin}" \
-            --import "${output}/kernels.ncu-rep" \
-            --csv \
-            --page details \
-            >"${output}/ncu_metrics.csv" \
-            2>"${output}/ncu_metrics.log"
-        if [[ ! -s "${output}/ncu_metrics.csv" ]] \
-            || ! grep -q 'Metric Name' "${output}/ncu_metrics.csv"; then
-            echo "error: Nsight Compute metrics export has no data: ${output}/ncu_metrics.csv" >&2
-            exit 3
+        local -a ncu_targets=(
+            "append_tokens:appendTokensKernel"
+            "gather:gatherKernel"
+            "attention_scores:attentionScoresKernel"
+            "attention_output:attentionOutputKernel"
+        )
+        if [[ "${variant}" == hetero ]]; then
+            ncu_targets+=("promotion:promotionKernel")
         fi
+
+        local target_spec target_name kernel_name kernel_output
+        for target_spec in "${ncu_targets[@]}"; do
+            target_name="${target_spec%%:*}"
+            kernel_name="${target_spec#*:}"
+            kernel_output="${output}/ncu/${target_name}"
+            mkdir -p "${kernel_output}/run"
+            echo "Running Nsight Compute: ${variant}/long/${target_name}"
+            CUDA_VISIBLE_DEVICES="${cuda_device}" \
+                "${ncu_bin}" \
+                --target-processes all \
+                --set basic \
+                --kernel-name "regex:.*${kernel_name}.*" \
+                --launch-count "${ncu_launch_count}" \
+                --export "${kernel_output}/kernels" \
+                --force-overwrite \
+                --csv \
+                --log-file "${kernel_output}/ncu.csv" \
+                "${benchmark}" \
+                --workload long \
+                --seed "${benchmark_seed}" \
+                --requests 10000 \
+                --max-sequence-length "${maximum_sequence_length}" \
+                --warmup 0 \
+                --iterations 1 \
+                --git-commit "${source_commit}" \
+                --output-dir "${kernel_output}/run" \
+                "${fixed_arguments[@]}" \
+                >"${kernel_output}/ncu.log" 2>&1
+
+            "${ncu_bin}" \
+                --import "${kernel_output}/kernels.ncu-rep" \
+                --csv \
+                --page details \
+                >"${kernel_output}/metrics.csv" \
+                2>"${kernel_output}/metrics.log"
+            if [[ ! -s "${kernel_output}/metrics.csv" ]] \
+                || ! grep -q 'Metric Name' "${kernel_output}/metrics.csv" \
+                || ! grep -q "${kernel_name}" "${kernel_output}/metrics.csv"; then
+                echo "error: Nsight Compute metrics export has no ${kernel_name} data" >&2
+                exit 3
+            fi
+        done
     fi
 }
 
@@ -216,6 +234,8 @@ profile_variant fixed_8
     echo "maximum_sequence_length=${maximum_sequence_length}"
     echo "nsys_iterations=${nsys_iterations}"
     echo "ncu_launch_count=${ncu_launch_count}"
+    echo "ncu_targets=append_tokens gather attention_scores attention_output"
+    echo "ncu_hetero_extra_targets=promotion"
     if [[ "${run_nsys}" == true ]]; then
         echo "nsys=$(${nsys_bin} --version | head -n 1)"
     else
