@@ -82,7 +82,7 @@ if [[ -z "${ncu_bin}" ]] || [[ ! -x "${ncu_bin}" ]]; then
 fi
 readonly nsys_bin
 readonly ncu_bin
-readonly benchmark="${project_root}/build-k5-cuda-release/kim_kv_cuda_benchmark"
+readonly benchmark="${project_root}/build-k5-cuda-release/benchmarks/kim_kv_cuda_benchmark"
 if [[ ! -x "${benchmark}" ]]; then
     echo "error: CUDA Release benchmark is missing; run K6 matrix first" >&2
     exit 2

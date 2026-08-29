@@ -128,7 +128,7 @@ run_cpu_report()
     fi
     mkdir -p "${output}"
     echo "Running CPU Release: ${variant}/${workload}"
-    "${project_root}/build-k5-cpu-release/kim_kv_cpu_benchmark" \
+    "${project_root}/build-k5-cpu-release/benchmarks/kim_kv_cpu_benchmark" \
         --workload "${workload}" \
         --seed "${benchmark_seed}" \
         --requests "${cpu_requests}" \
@@ -160,7 +160,7 @@ run_cuda_report()
     mkdir -p "${output}"
     echo "Running CUDA Release: ${variant}/${workload}"
     CUDA_VISIBLE_DEVICES="${cuda_device}" \
-        "${project_root}/build-k5-cuda-release/kim_kv_cuda_benchmark" \
+        "${project_root}/build-k5-cuda-release/benchmarks/kim_kv_cuda_benchmark" \
         --workload "${workload}" \
         --seed "${benchmark_seed}" \
         --requests "${cpu_requests}" \
