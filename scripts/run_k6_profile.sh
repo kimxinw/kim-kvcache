@@ -14,11 +14,31 @@ readonly short_commit="${source_commit:0:12}"
 readonly timestamp_utc="$(date -u +%Y%m%dT%H%M%SZ)"
 readonly results_root="${KIM_KV_RESULTS_ROOT:-${project_root}/benchmarks/results}"
 readonly result_directory="${results_root}/${short_commit}_${timestamp_utc}_k6_profile"
+readonly profile_component="${KIM_KV_PROFILE_COMPONENT:-all}"
 readonly cuda_device="${KIM_KV_CUDA_DEVICE:-0}"
 readonly benchmark_seed="${KIM_KV_BENCHMARK_SEED:-0x4B564341434845}"
 readonly maximum_sequence_length="${KIM_KV_MAX_SEQUENCE_LENGTH:-544}"
 readonly nsys_iterations="${KIM_KV_NSYS_ITERATIONS:-3}"
 readonly ncu_launch_count="${KIM_KV_NCU_LAUNCH_COUNT:-24}"
+
+case "${profile_component}" in
+    all)
+        readonly run_nsys=true
+        readonly run_ncu=true
+        ;;
+    nsys)
+        readonly run_nsys=true
+        readonly run_ncu=false
+        ;;
+    ncu)
+        readonly run_nsys=false
+        readonly run_ncu=true
+        ;;
+    *)
+        echo "error: KIM_KV_PROFILE_COMPONENT must be all, nsys, or ncu" >&2
+        exit 2
+        ;;
+esac
 
 if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
     echo "error: formal profiling requires a clean, committed worktree" >&2
@@ -72,11 +92,13 @@ if [[ -z "${nsys_bin}" ]] || [[ -z "${ncu_bin}" ]]; then
         fi
     done
 fi
-if [[ -z "${nsys_bin}" ]] || [[ ! -x "${nsys_bin}" ]]; then
+if [[ "${run_nsys}" == true ]] \
+    && { [[ -z "${nsys_bin}" ]] || [[ ! -x "${nsys_bin}" ]]; }; then
     echo "error: Nsight Systems CLI not found; set KIM_KV_NSYS" >&2
     exit 2
 fi
-if [[ -z "${ncu_bin}" ]] || [[ ! -x "${ncu_bin}" ]]; then
+if [[ "${run_ncu}" == true ]] \
+    && { [[ -z "${ncu_bin}" ]] || [[ ! -x "${ncu_bin}" ]]; }; then
     echo "error: Nsight Compute CLI not found; set KIM_KV_NCU" >&2
     exit 2
 fi
@@ -98,57 +120,84 @@ profile_variant()
     if [[ "${variant}" == fixed_8 ]]; then
         fixed_arguments=(--fixed-page-tokens 8)
     fi
-    mkdir -p "${output}/nsys_run" "${output}/ncu_run"
+    if [[ "${run_nsys}" == true ]]; then
+        mkdir -p "${output}/nsys_run"
+        echo "Running Nsight Systems: ${variant}/long"
+        CUDA_VISIBLE_DEVICES="${cuda_device}" \
+            "${nsys_bin}" profile \
+            --trace=cuda,osrt \
+            --sample=none \
+            --cpuctxsw=none \
+            --cuda-event-trace=false \
+            --force-overwrite=true \
+            --output="${output}/timeline" \
+            "${benchmark}" \
+            --workload long \
+            --seed "${benchmark_seed}" \
+            --requests 10000 \
+            --max-sequence-length "${maximum_sequence_length}" \
+            --warmup 1 \
+            --iterations "${nsys_iterations}" \
+            --git-commit "${source_commit}" \
+            --output-dir "${output}/nsys_run" \
+            "${fixed_arguments[@]}" \
+            >"${output}/nsys.log" 2>&1
 
-    echo "Running Nsight Systems: ${variant}/long"
-    CUDA_VISIBLE_DEVICES="${cuda_device}" \
-        "${nsys_bin}" profile \
-        --trace=cuda,osrt \
-        --sample=none \
-        --cpuctxsw=none \
-        --force-overwrite=true \
-        --output="${output}/timeline" \
-        "${benchmark}" \
-        --workload long \
-        --seed "${benchmark_seed}" \
-        --requests 10000 \
-        --max-sequence-length "${maximum_sequence_length}" \
-        --warmup 1 \
-        --iterations "${nsys_iterations}" \
-        --git-commit "${source_commit}" \
-        --output-dir "${output}/nsys_run" \
-        "${fixed_arguments[@]}" \
-        >"${output}/nsys.log" 2>&1
+        "${nsys_bin}" stats \
+            --force-overwrite true \
+            --force-export true \
+            --report cuda_gpu_kern_sum,cuda_api_sum \
+            --format csv \
+            --output "${output}/nsys_stats" \
+            "${output}/timeline.nsys-rep" \
+            >"${output}/nsys_stats.log" 2>&1
 
-    "${nsys_bin}" stats \
-        --force-overwrite=true \
-        --report cuda_gpu_kern_sum,cuda_api_sum \
-        --format csv \
-        --output "${output}/nsys_stats" \
-        "${output}/timeline.nsys-rep" \
-        >"${output}/nsys_stats.log" 2>&1
+        for report in cuda_gpu_kern_sum cuda_api_sum; do
+            report_path="${output}/nsys_stats_${report}.csv"
+            if [[ ! -s "${report_path}" ]] \
+                || [[ "$(wc -l < "${report_path}")" -lt 2 ]]; then
+                echo "error: Nsight Systems report has no data: ${report_path}" >&2
+                exit 3
+            fi
+        done
+    fi
 
-    echo "Running Nsight Compute: ${variant}/long"
-    CUDA_VISIBLE_DEVICES="${cuda_device}" \
+    if [[ "${run_ncu}" == true ]]; then
+        mkdir -p "${output}/ncu_run"
+        echo "Running Nsight Compute: ${variant}/long"
+        CUDA_VISIBLE_DEVICES="${cuda_device}" \
+            "${ncu_bin}" \
+            --target-processes all \
+            --set basic \
+            --launch-count "${ncu_launch_count}" \
+            --export "${output}/kernels" \
+            --force-overwrite \
+            --csv \
+            --log-file "${output}/ncu.csv" \
+            "${benchmark}" \
+            --workload long \
+            --seed "${benchmark_seed}" \
+            --requests 10000 \
+            --max-sequence-length "${maximum_sequence_length}" \
+            --warmup 0 \
+            --iterations 1 \
+            --git-commit "${source_commit}" \
+            --output-dir "${output}/ncu_run" \
+            "${fixed_arguments[@]}" \
+            >"${output}/ncu.log" 2>&1
+
         "${ncu_bin}" \
-        --target-processes all \
-        --set basic \
-        --launch-count "${ncu_launch_count}" \
-        --export "${output}/kernels" \
-        --force-overwrite \
-        --csv \
-        --log-file "${output}/ncu.csv" \
-        "${benchmark}" \
-        --workload long \
-        --seed "${benchmark_seed}" \
-        --requests 10000 \
-        --max-sequence-length "${maximum_sequence_length}" \
-        --warmup 0 \
-        --iterations 1 \
-        --git-commit "${source_commit}" \
-        --output-dir "${output}/ncu_run" \
-        "${fixed_arguments[@]}" \
-        >"${output}/ncu.log" 2>&1
+            --import "${output}/kernels.ncu-rep" \
+            --csv \
+            --page details \
+            >"${output}/ncu_metrics.csv" \
+            2>"${output}/ncu_metrics.log"
+        if [[ ! -s "${output}/ncu_metrics.csv" ]] \
+            || ! grep -q 'Metric Name' "${output}/ncu_metrics.csv"; then
+            echo "error: Nsight Compute metrics export has no data: ${output}/ncu_metrics.csv" >&2
+            exit 3
+        fi
+    fi
 }
 
 profile_variant hetero
@@ -162,12 +211,21 @@ profile_variant fixed_8
     echo "working_tree_clean=true"
     echo "workload=long"
     echo "variants=hetero fixed_8"
+    echo "profile_component=${profile_component}"
     echo "cuda_visible_device=${cuda_device}"
     echo "maximum_sequence_length=${maximum_sequence_length}"
     echo "nsys_iterations=${nsys_iterations}"
     echo "ncu_launch_count=${ncu_launch_count}"
-    echo "nsys=$(${nsys_bin} --version | head -n 1)"
-    echo "ncu=$(${ncu_bin} --version | grep '^Version' | head -n 1)"
+    if [[ "${run_nsys}" == true ]]; then
+        echo "nsys=$(${nsys_bin} --version | head -n 1)"
+    else
+        echo "nsys=skipped"
+    fi
+    if [[ "${run_ncu}" == true ]]; then
+        echo "ncu=$(${ncu_bin} --version | grep '^Version' | head -n 1)"
+    else
+        echo "ncu=skipped"
+    fi
     if [[ -x /usr/lib/wsl/lib/nvidia-smi ]]; then
         echo "gpu=$(
             /usr/lib/wsl/lib/nvidia-smi \
