@@ -1,0 +1,17 @@
+schema_version=1
+stage=K6
+source_commit=701205929a9bb99f56df91bcced233b3e64e5b5a
+timestamp_utc=20260829T103733Z
+working_tree_clean=true
+workload=long
+variants=hetero fixed_8
+profile_component=ncu
+cuda_visible_device=0
+maximum_sequence_length=544
+nsys_iterations=3
+ncu_launch_count=4
+ncu_targets=append_tokens gather attention_scores attention_output
+ncu_hetero_extra_targets=promotion
+nsys=skipped
+ncu=Version 2025.2.1.0 (build 35987062) (public-release)
+gpu=NVIDIA GeForce RTX 3060, 560.94, 12288 MiB

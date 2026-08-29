@@ -1,0 +1,3 @@
+==PROF== Connected to process 2218 (/home/xinwang/projects/kim-kvcache/build-k5-cuda-release/benchmarks/kim_kv_cuda_benchmark)
+==PROF== Disconnected from process 2218
+==PROF== Report: /home/xinwang/projects/kim-kvcache/benchmarks/results/701205929a9b_20260829T103733Z_k6_profile/fixed_8/ncu/attention_scores/kernels.ncu-rep

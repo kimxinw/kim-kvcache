@@ -1,0 +1,3 @@
+CUDA benchmark completed
+JSON: /home/xinwang/projects/kim-kvcache/benchmarks/results/701205929a9b_20260829T103733Z_k6_profile/hetero/ncu/attention_scores/run/cuda_data_path.json
+CSV:  /home/xinwang/projects/kim-kvcache/benchmarks/results/701205929a9b_20260829T103733Z_k6_profile/hetero/ncu/attention_scores/run/cuda_data_path.csv
