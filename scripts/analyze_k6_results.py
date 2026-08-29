@@ -92,7 +92,11 @@ def write_runtime_comparison(
         "requests_per_second",
     )
     with destination.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.DictWriter(output, fieldnames=fields)
+        writer = csv.DictWriter(
+            output,
+            fieldnames=fields,
+            lineterminator="\n",
+        )
         writer.writeheader()
         for (variant, workload), report in sorted(reports.items()):
             result = workload_result(report)
@@ -167,7 +171,11 @@ def write_break_even(destination: Path, rows: list[dict[str, Any]]) -> None:
         "break_even_repeats",
     )
     with destination.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.DictWriter(output, fieldnames=fields)
+        writer = csv.DictWriter(
+            output,
+            fieldnames=fields,
+            lineterminator="\n",
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -184,7 +192,11 @@ def write_curve(destination: Path, rows: list[dict[str, Any]]) -> None:
         "status",
     )
     with destination.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.DictWriter(output, fieldnames=fields)
+        writer = csv.DictWriter(
+            output,
+            fieldnames=fields,
+            lineterminator="\n",
+        )
         writer.writeheader()
         for row in rows:
             promotion_ns = int(row.get("promotion_cost_per_iteration_ns") or 0)

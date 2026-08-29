@@ -1,0 +1,5 @@
+Generating SQLite file /tmp/kim-k6-nsight-2025/timeline.sqlite from /tmp/kim-k6-nsight-2025/timeline.nsys-rep
+Processing [/tmp/kim-k6-nsight-2025/timeline.sqlite] with [/home/xinwang/miniconda3/pkgs/nsight-compute-2025.2.1.3-0/nsight-compute-2025.2.1/host/target-linux-x64/reports/cuda_gpu_kern_sum.py] to [/tmp/kim-k6-nsight-2025/stats_cuda_gpu_kern_sum.csv]... PROCESSED (EMPTY RESULTS)
+SKIPPED: /tmp/kim-k6-nsight-2025/timeline.sqlite does not contain CUDA kernel data.
+Processing [/tmp/kim-k6-nsight-2025/timeline.sqlite] with [/home/xinwang/miniconda3/pkgs/nsight-compute-2025.2.1.3-0/nsight-compute-2025.2.1/host/target-linux-x64/reports/cuda_api_sum.py] to [/tmp/kim-k6-nsight-2025/stats_cuda_api_sum.csv]... PROCESSED (EMPTY RESULTS)
+SKIPPED: /tmp/kim-k6-nsight-2025/timeline.sqlite does not contain CUDA trace data.
