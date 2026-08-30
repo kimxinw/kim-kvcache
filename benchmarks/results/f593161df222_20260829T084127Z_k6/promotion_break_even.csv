@@ -1,0 +1,5 @@
+workload,status,promotion_samples,promotion_cost_per_iteration_ns,hetero_access_mean_ns,fixed8_access_mean_ns,access_saving_per_repeat_ns,break_even_repeats
+long,break_even_found,160,819403,1567672,2349576,781904,2
+mixed,break_even_found,83,436883,911469,1225911,314442,2
+shared_prompt,no_promotion_samples,0,0,174657,170518,-4139,
+fork_cow,no_promotion_samples,0,0,59514,46573,-12941,

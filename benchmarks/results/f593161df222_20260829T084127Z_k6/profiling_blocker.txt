@@ -1,0 +1,15 @@
+stage=K6
+source_commit=f593161df222b06e4a23dd7fc6960dc430dd3c25
+host_kernel=Linux 6.6.114.1-microsoft-standard-WSL2
+target_gpu=NVIDIA GeForce RTX 3060
+target_gpu_uuid=GPU-03bace62-8f5d-3d88-b560-6060a2b32289
+secondary_gpu=Quadro P4000
+secondary_gpu_uuid=GPU-4b4da1ed-4f84-f34f-bd0d-fcf69fac555a
+driver=560.94
+cuda=12.6
+nsight_systems_versions=2024.3.2.0,2025.2.1.0
+nsight_compute_versions=2024.3.2.0,2025.2.1.0
+nsys_result=TargetProfilingFailed: Unrecognized GPU UUID 4b4da1ed-4f84-f34f-bd0d-fcf69fac555a
+ncu_result=Unknown Error on device 0
+ncu_device_query=NVIDIA GeForce RTX 3060 (GA106) identified successfully
+status=blocked_by_wsl_dual_gpu_profiler_collection

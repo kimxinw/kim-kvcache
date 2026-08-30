@@ -1,0 +1,38 @@
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+CUDA benchmark completed
+JSON: /tmp/kim-k6-nsight-2025/nsys_run/cuda_data_path.json
+CSV:  /tmp/kim-k6-nsight-2025/nsys_run/cuda_data_path.csv
+Collecting data...
+Generating '/tmp/nsys-report-f04f.qdstrm'
+[1/1] [0%                          ] timeline.nsys-rep[1/1] [0%                          ] timeline.nsys-rep[1/1] [5%                          ] timeline.nsys-rep[1/1] [=15%                        ] timeline.nsys-rep[1/1] [====25%                     ] timeline.nsys-rep[1/1] [====26%                     ] timeline.nsys-rep[1/1] [=====29%                    ] timeline.nsys-rep[1/1] [========================100%] timeline.nsys-rep
+Importer error status: Importation succeeded with non-fatal errors.
+**** Analysis failed with:
+Status: TargetProfilingFailed
+Props {
+  Items {
+    Type: DeviceId
+    Value: "Local (CLI)"
+  }
+}
+Error {
+  Type: RuntimeError
+  SubError {
+    Type: ProcessEventsError
+    Props {
+      Items {
+        Type: ErrorText
+        Value: "/dvs/p4/build/sw/devtools/Agora/Rel/CUDA12.9/QuadD/Host/Analysis/EventHandler/TraceEventHandler.cpp(677): Throw in function void QuadDAnalysis::EventHandler::TraceEventParser::operator()(const QuadDCommon::FlatComm::Cuda::Event&)\nDynamic exception type: boost::wrapexcept<QuadDCommon::InternalErrorException>\nstd::exception::what: InternalErrorException\n[QuadDCommon::tag_message*] = Unrecognized GPU UUID: 4b4da1ed-4f84-f34f-bd0d-fcf69fac555a\n"
+      }
+    }
+  }
+}
+
+
+**** Errors occurred while processing the raw events. ****
+**** Please see the Diagnostics Summary page after opening the report file in GUI. ****
+Generated:
+	/tmp/kim-k6-nsight-2025/timeline.qdstrm
+	/tmp/kim-k6-nsight-2025/timeline.nsys-rep

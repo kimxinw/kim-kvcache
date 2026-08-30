@@ -1,0 +1,33 @@
+CUDA benchmark completed
+JSON: /tmp/kim-k6-profile-smoke/f593161df222_20260829T083955Z_k6_profile/hetero/nsys_run/cuda_data_path.json
+CSV:  /tmp/kim-k6-profile-smoke/f593161df222_20260829T083955Z_k6_profile/hetero/nsys_run/cuda_data_path.csv
+Generating '/tmp/nsys-report-54ae.qdstrm'
+[1/1] [0%                          ] timeline.nsys-rep[1/1] [0%                          ] timeline.nsys-rep[1/1] [11%                         ] timeline.nsys-rep[1/1] [==20%                       ] timeline.nsys-rep[1/1] [==21%                       ] timeline.nsys-rep[1/1] [=====30%                    ] timeline.nsys-rep[1/1] [=====31%                    ] timeline.nsys-rep[1/1] [========================100%] timeline.nsys-rep
+Importer error status: Importation succeeded with non-fatal errors.
+**** Analysis failed with:
+Status: TargetProfilingFailed
+Props {
+  Items {
+    Type: DeviceId
+    Value: "Local (CLI)"
+  }
+}
+Error {
+  Type: RuntimeError
+  SubError {
+    Type: ProcessEventsError
+    Props {
+      Items {
+        Type: ErrorText
+        Value: "/dvs/p4/build/sw/devtools/Agora/Rel/CUDA12.6/QuadD/Host/Analysis/EventHandler/TraceEventHandler.cpp(812): Throw in function void QuadDAnalysis::EventHandler::TraceEventParser::operator()(const QuadDCommon::FlatComm::Cuda::Event&)\nDynamic exception type: boost::wrapexcept<QuadDCommon::InternalErrorException>\nstd::exception::what: InternalErrorException\n[QuadDCommon::tag_message*] = Unrecognized GPU UUID: 4b4da1ed-4f84-f34f-bd0d-fcf69fac555a\n"
+      }
+    }
+  }
+}
+
+
+**** Errors occurred while processing the raw events. ****
+**** Please see the Diagnostics Summary page after opening the report file in GUI. ****
+Generated:
+    /tmp/kim-k6-profile-smoke/f593161df222_20260829T083955Z_k6_profile/hetero/timeline.qdstrm
+    /tmp/kim-k6-profile-smoke/f593161df222_20260829T083955Z_k6_profile/hetero/timeline.nsys-rep
