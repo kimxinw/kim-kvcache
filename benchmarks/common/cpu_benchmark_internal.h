@@ -1,8 +1,8 @@
 #pragma once
 
-#include "heteropage_kv/benchmark/benchmark.h"
-#include "heteropage_kv/fixed/fixed_page_manager.h"
-#include "heteropage_kv/runtime/kv_cache_manager.h"
+#include "kim-kv/benchmark/benchmark.h"
+#include "kim-kv/fixed/fixed_page_manager.h"
+#include "kim-kv/runtime/kv_cache_manager.h"
 
 #include <chrono>
 #include <cstdint>

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "heteropage_kv/core/block_table.h"
-#include "heteropage_kv/core/page_pool.h"
-#include "heteropage_kv/core/page_state.h"
-#include "heteropage_kv/runtime/page_lease.h"
-#include "heteropage_kv/runtime/promotion.h"
+#include "kim-kv/core/block_table.h"
+#include "kim-kv/core/page_pool.h"
+#include "kim-kv/core/page_state.h"
+#include "kim-kv/runtime/page_lease.h"
+#include "kim-kv/runtime/promotion.h"
 
 #include <array>
 #include <cstddef>

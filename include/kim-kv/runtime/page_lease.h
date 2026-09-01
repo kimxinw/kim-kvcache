@@ -1,7 +1,7 @@
 #pragma once
 
-#include "heteropage_kv/core/block_table.h"
-#include "heteropage_kv/core/page_state.h"
+#include "kim-kv/core/block_table.h"
+#include "kim-kv/core/page_state.h"
 
 #include <cstdint>
 #include <vector>

@@ -1,18 +1,18 @@
-set(HETEROPAGE_KV_GIT_COMMIT "unknown")
+set(KIM_KV_GIT_COMMIT "unknown")
 find_package(Git QUIET)
 
 if(GIT_FOUND)
     execute_process(
         COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        OUTPUT_VARIABLE HETEROPAGE_KV_GIT_COMMIT
+        OUTPUT_VARIABLE KIM_KV_GIT_COMMIT
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
-        RESULT_VARIABLE HETEROPAGE_KV_GIT_RESULT
+        RESULT_VARIABLE KIM_KV_GIT_RESULT
     )
 
-    if(NOT HETEROPAGE_KV_GIT_RESULT EQUAL 0)
-        set(HETEROPAGE_KV_GIT_COMMIT "unknown")
+    if(NOT KIM_KV_GIT_RESULT EQUAL 0)
+        set(KIM_KV_GIT_COMMIT "unknown")
     endif()
 endif()
 
@@ -42,13 +42,13 @@ target_include_directories(
 target_compile_definitions(
     kim_kv_benchmark
     PRIVATE
-        HETEROPAGE_KV_GIT_COMMIT="${HETEROPAGE_KV_GIT_COMMIT}"
+        KIM_KV_GIT_COMMIT="${KIM_KV_GIT_COMMIT}"
 )
 
 target_link_libraries(
     kim_kv_benchmark
     PRIVATE
-        heteropage_kv_warnings
+        kim_kv_warnings
     PUBLIC
         kim_kv
 )
@@ -61,11 +61,11 @@ add_executable(
 target_link_libraries(
     kim_kv_cpu_benchmark
     PRIVATE
-        heteropage_kv_warnings
+        kim_kv_warnings
         kim_kv_benchmark
 )
 
-if(HETEROPAGE_KV_ENABLE_CUDA)
+if(KIM_KV_ENABLE_CUDA)
     add_executable(
         kim_kv_cuda_benchmark
         cuda/benchmark.cpp
@@ -80,7 +80,7 @@ if(HETEROPAGE_KV_ENABLE_CUDA)
     target_link_libraries(
         kim_kv_cuda_benchmark
         PRIVATE
-            heteropage_kv_warnings
+            kim_kv_warnings
             kim_kv_benchmark
             kim_kv_cuda
             CUDA::cudart

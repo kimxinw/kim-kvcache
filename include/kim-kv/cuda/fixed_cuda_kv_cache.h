@@ -1,7 +1,7 @@
 #pragma once
 
-#include "heteropage_kv/cuda/cuda_kv_cache.h"
-#include "heteropage_kv/fixed/fixed_page_manager.h"
+#include "kim-kv/cuda/cuda_kv_cache.h"
+#include "kim-kv/fixed/fixed_page_manager.h"
 
 #include <cstdint>
 #include <mutex>

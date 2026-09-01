@@ -30,7 +30,7 @@ target_include_directories(
 target_link_libraries(
     kim_kv_cuda
     PRIVATE
-        heteropage_kv_warnings
+        kim_kv_warnings
     PUBLIC
         kim_kv
         CUDA::cudart

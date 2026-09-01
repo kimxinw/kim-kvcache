@@ -1,6 +1,6 @@
 #pragma once
 
-#include "heteropage_kv/core/page_state.h"
+#include "kim-kv/core/page_state.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "heteropage_kv/core/block_table.h"
-#include "heteropage_kv/cuda/cuda_status.h"
-#include "heteropage_kv/reference/kv_layout.h"
-#include "heteropage_kv/runtime/promotion.h"
+#include "kim-kv/core/block_table.h"
+#include "kim-kv/cuda/cuda_status.h"
+#include "kim-kv/reference/kv_layout.h"
+#include "kim-kv/runtime/promotion.h"
 
 #include <cstddef>
 #include <cstdint>

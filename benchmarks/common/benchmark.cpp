@@ -1,4 +1,4 @@
-#include "heteropage_kv/benchmark/benchmark.h"
+#include "kim-kv/benchmark/benchmark.h"
 
 #include <algorithm>
 #include <array>
@@ -108,8 +108,8 @@ bool validateConfig(
 
 std::string defaultGitCommit()
 {
-#ifdef HETEROPAGE_KV_GIT_COMMIT
-    return HETEROPAGE_KV_GIT_COMMIT;
+#ifdef KIM_KV_GIT_COMMIT
+    return KIM_KV_GIT_COMMIT;
 #else
     return "unknown";
 #endif

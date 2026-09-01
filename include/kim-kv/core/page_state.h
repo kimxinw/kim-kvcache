@@ -1,6 +1,6 @@
 #pragma once
 
-#include "heteropage_kv/core/page_types.h"
+#include "kim-kv/core/page_types.h"
 
 #include <cstdint>
 #include <string_view>

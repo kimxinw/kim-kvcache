@@ -1,0 +1,84 @@
+# Benchmark result policy
+
+This directory stores formal, commit-bound Release benchmark evidence. Debug
+and smoke outputs belong in `/tmp` and must not be presented as performance
+results.
+
+`scripts/run_release_matrix.sh` creates one directory per run:
+
+```text
+benchmarks/results/<source-commit>_<UTC timestamp>/
+├── MANIFEST.txt
+├── SHA256SUMS
+├── summary.csv
+├── capacity_comparison.csv
+├── cpu/<workload>/
+│   ├── cpu_metadata.json.gz
+│   ├── cpu_metadata.csv.gz
+│   └── run.log
+└── cuda/<workload>/
+    ├── cuda_data_path.json.gz
+    ├── cuda_data_path.csv.gz
+    └── run.log
+```
+
+A formal run must satisfy all of the following:
+
+1. The source worktree is clean before execution.
+2. Every report records the exact full source commit.
+3. Release contract tests pass before benchmarks start.
+4. Every workload reports `successful: true`, zero unexpected failures,
+   valid invariants, and complete resource release.
+5. Raw JSON/CSV files are compressed without modification after generation.
+6. `SHA256SUMS` matches every artifact in the run directory.
+
+The consolidated `summary.csv` contains only capacity and latency-summary
+records. `capacity_comparison.csv` contains the derived Fixed-8/Fixed-64 versus
+Hetero-8/64 percentages used by the report. Per-operation raw samples remain
+in the per-workload JSON/CSV files.
+
+K6 uses `scripts/run_k6_release_matrix.sh` and stores an explicit runtime
+variant level below both `cpu/` and `cuda/`:
+
+```text
+benchmarks/results/<source-commit>_<UTC timestamp>_k6/
+├── MANIFEST.txt
+├── SHA256SUMS
+├── REPORT.md
+├── summary.csv
+├── runtime_comparison.csv
+├── promotion_break_even.csv
+├── promotion_break_even_curve.csv
+├── cpu/<hetero|fixed_8|fixed_16|fixed_32|fixed_64>/<workload>/
+└── cuda/<hetero|fixed_8|fixed_16|fixed_32|fixed_64>/<workload>/
+```
+
+The break-even curve is an analytical repeat model built from measured CUDA
+Event primitives. A row with `no_promotion_samples` is intentionally not
+assigned a break-even point. Failed profiler attempts may be retained with
+their diagnostics, but they cannot be presented as a completed Nsight case
+study.
+
+K6 profiler runs use `scripts/run_k6_profile.sh`. Set
+`KIM_KV_PROFILE_COMPONENT` to `all`, `ncu`, or `nsys`; the latter two allow a
+supported profiler to finish without misrepresenting the other profiler's
+environmental failure:
+
+```text
+benchmarks/results/<source-commit>_<UTC timestamp>_k6_profile/
+├── MANIFEST.txt
+├── SHA256SUMS
+├── NCU_SUMMARY.md                 # added after reviewed NCU analysis
+├── NCU_SUMMARY.csv                # added after reviewed NCU analysis
+├── hetero/ncu/<kernel>/
+│   ├── kernels.ncu-rep
+│   ├── metrics.csv
+│   └── run/
+└── fixed_8/ncu/<kernel>/
+```
+
+Nsight Compute collection is filtered by kernel name so that the launch limit
+cannot be consumed entirely by an earlier kernel. Nsight Systems collection is
+valid only when both `cuda_gpu_kern_sum` and `cuda_api_sum` contain data. The
+script treats a missing or header-only report as an error even when `nsys`
+itself exits successfully.

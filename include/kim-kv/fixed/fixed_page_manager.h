@@ -1,10 +1,10 @@
 #pragma once
 
-#include "heteropage_kv/core/block_table.h"
-#include "heteropage_kv/core/page_pool.h"
-#include "heteropage_kv/core/page_state.h"
+#include "kim-kv/core/block_table.h"
+#include "kim-kv/core/page_pool.h"
+#include "kim-kv/core/page_state.h"
 // 复用全项目统一的 RequestId / kInvalidRequestId 定义。
-#include "heteropage_kv/runtime/promotion.h"
+#include "kim-kv/runtime/promotion.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,7 +23,7 @@ struct FixedPageManagerSnapshot final {
 };
 
 // K6 固定页运行时对照：单一页种类、可配置 token 容量的页式 KV 映射，
-// 作为 HeteroPageKV 双池 + Promotion 运行时的等价对照 Baseline。
+// 作为 kim-kvcache 双池 + Promotion 运行时的等价对照 Baseline。
 //
 // 语义与 KvCacheManager 的 Create/Append/Seal/Fork/COW/Release 子集对齐；
 // 没有 Promotion，因此不提供 Lease/Promotion API。物理 token 容量完全

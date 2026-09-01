@@ -1,6 +1,6 @@
 #pragma once
 
-#include "heteropage_kv/reference/kv_layout.h"
+#include "kim-kv/reference/kv_layout.h"
 
 #include <cstdint>
 #include <vector>

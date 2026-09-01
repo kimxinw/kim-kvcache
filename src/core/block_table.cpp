@@ -1,4 +1,4 @@
-#include "heteropage_kv/core/block_table.h"
+#include "kim-kv/core/block_table.h"
 
 #include <algorithm>
 #include <cstddef>

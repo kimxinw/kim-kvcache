@@ -1,8 +1,8 @@
 #pragma once
 
-#include "heteropage_kv/benchmark/benchmark.h"
-#include "heteropage_kv/cuda/cuda_kv_cache.h"
-#include "heteropage_kv/cuda/fixed_cuda_kv_cache.h"
+#include "kim-kv/benchmark/benchmark.h"
+#include "kim-kv/cuda/cuda_kv_cache.h"
+#include "kim-kv/cuda/fixed_cuda_kv_cache.h"
 
 #include <cuda_runtime_api.h>
 

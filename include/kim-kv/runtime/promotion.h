@@ -1,7 +1,7 @@
 #pragma once
 
-#include "heteropage_kv/core/page_handle.h"
-#include "heteropage_kv/core/page_state.h"
+#include "kim-kv/core/page_handle.h"
+#include "kim-kv/core/page_state.h"
 
 #include <array>
 #include <cstddef>

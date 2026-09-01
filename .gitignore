@@ -7,3 +7,5 @@ CMakeCache.txt
 compile_commands.json
 *.o
 *.a
+
+!README.md

@@ -23,12 +23,12 @@ target_include_directories(
 target_link_libraries(
     kim_kv
     PRIVATE
-        heteropage_kv_warnings
+        kim_kv_warnings
     PUBLIC
         Threads::Threads
-        heteropage_kv_sanitizers
+        kim_kv_sanitizers
 )
 
-if(HETEROPAGE_KV_ENABLE_CUDA)
+if(KIM_KV_ENABLE_CUDA)
     add_subdirectory(cuda)
 endif()

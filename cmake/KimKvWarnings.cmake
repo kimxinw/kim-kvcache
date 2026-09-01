@@ -1,7 +1,7 @@
-add_library(heteropage_kv_warnings INTERFACE)
+add_library(kim_kv_warnings INTERFACE)
 
 target_compile_options(
-    heteropage_kv_warnings
+    kim_kv_warnings
     INTERFACE
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX>:-Wextra>

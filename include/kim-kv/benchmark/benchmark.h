@@ -1,6 +1,6 @@
 #pragma once
 
-#include "heteropage_kv/reference/kv_layout.h"
+#include "kim-kv/reference/kv_layout.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -256,7 +256,7 @@ struct CommandLineOptions final {
     std::vector<WorkloadKind> const& workloads
 );
 
-// 仅在 HETEROPAGE_KV_ENABLE_CUDA=ON 时提供实现。
+// 仅在 KIM_KV_ENABLE_CUDA=ON 时提供实现。
 [[nodiscard]] BenchmarkReport runCudaBenchmark(
     BenchmarkConfig const& config,
     std::vector<WorkloadKind> const& workloads

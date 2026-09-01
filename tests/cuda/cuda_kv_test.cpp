@@ -1,6 +1,6 @@
-#include "heteropage_kv/cuda/cuda_kv_cache.h"
-#include "heteropage_kv/cuda/fixed_cuda_kv_cache.h"
-#include "heteropage_kv/reference/kv_reference.h"
+#include "kim-kv/cuda/cuda_kv_cache.h"
+#include "kim-kv/cuda/fixed_cuda_kv_cache.h"
+#include "kim-kv/reference/kv_reference.h"
 
 #include <cuda_runtime_api.h>
 

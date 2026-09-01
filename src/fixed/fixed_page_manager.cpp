@@ -1,4 +1,4 @@
-#include "heteropage_kv/fixed/fixed_page_manager.h"
+#include "kim-kv/fixed/fixed_page_manager.h"
 
 #include <algorithm>
 #include <cstddef>

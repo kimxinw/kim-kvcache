@@ -1,7 +1,7 @@
 #pragma once
 
-#include "heteropage_kv/cuda/cuda_kv_storage.h"
-#include "heteropage_kv/runtime/kv_cache_manager.h"
+#include "kim-kv/cuda/cuda_kv_storage.h"
+#include "kim-kv/runtime/kv_cache_manager.h"
 
 #include <cstdint>
 #include <optional>

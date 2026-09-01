@@ -1,4 +1,4 @@
-#include "heteropage_kv/benchmark/benchmark.h"
+#include "kim-kv/benchmark/benchmark.h"
 
 #include "benchmark_workload.h"
 
