@@ -48,6 +48,14 @@ add_kim_kv_contract(
 )
 
 add_kim_kv_contract(
+    engine_kv_contract_test
+    engine_kv_contract
+    engine/engine_kv_contract_test.cpp
+    10
+    kim_kv
+)
+
+add_kim_kv_contract(
     fixed_page_test
     fixed_page_contract
     runtime/fixed_page_test.cpp

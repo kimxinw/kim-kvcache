@@ -1,0 +1,223 @@
+#include "kim-kv/engine/engine_kv.h"
+
+#include <utility>
+
+namespace kimkvcache {
+namespace {
+
+[[nodiscard]] constexpr EngineKvStatus status(
+    EngineKvError error) noexcept
+{
+    return EngineKvStatus{error};
+}
+
+} // namespace
+
+TokenTransaction::TokenTransaction(
+    std::unique_ptr<TokenTransactionBackend> backend,
+    TokenTransactionId transaction_id,
+    RequestId request_id,
+    std::uint32_t logical_token_position,
+    std::uint32_t layer_count,
+    EngineStream stream) noexcept
+    : backend_(std::move(backend))
+    , transaction_id_(transaction_id)
+    , request_id_(request_id)
+    , logical_token_position_(logical_token_position)
+    , layer_count_(layer_count)
+    , phase_(TokenTransactionPhase::AwaitingLayerWrite)
+    , stream_(stream)
+{
+    if (backend_ == nullptr
+        || transaction_id_ == kInvalidTokenTransactionId
+        || request_id_ == kInvalidRequestId
+        || layer_count_ == 0) {
+        if (backend_ != nullptr) {
+            backend_->rollback(stream_);
+        }
+        backend_.reset();
+        resetMovedFrom();
+    }
+}
+
+TokenTransaction::~TokenTransaction()
+{
+    rollbackNoexcept();
+}
+
+TokenTransaction::TokenTransaction(TokenTransaction&& other) noexcept
+    : backend_(std::move(other.backend_))
+    , transaction_id_(other.transaction_id_)
+    , request_id_(other.request_id_)
+    , logical_token_position_(other.logical_token_position_)
+    , layer_count_(other.layer_count_)
+    , next_layer_(other.next_layer_)
+    , phase_(other.phase_)
+    , stream_(other.stream_)
+{
+    other.resetMovedFrom();
+}
+
+TokenTransaction& TokenTransaction::operator=(
+    TokenTransaction&& other) noexcept
+{
+    if (this == &other) {
+        return *this;
+    }
+
+    rollbackNoexcept();
+
+    backend_ = std::move(other.backend_);
+    transaction_id_ = other.transaction_id_;
+    request_id_ = other.request_id_;
+    logical_token_position_ = other.logical_token_position_;
+    layer_count_ = other.layer_count_;
+    next_layer_ = other.next_layer_;
+    phase_ = other.phase_;
+    stream_ = other.stream_;
+
+    other.resetMovedFrom();
+    return *this;
+}
+
+bool TokenTransaction::active() const noexcept
+{
+    switch (phase_) {
+    case TokenTransactionPhase::AwaitingLayerWrite:
+    case TokenTransactionPhase::AwaitingLayerAttention:
+    case TokenTransactionPhase::ReadyToCommit:
+    case TokenTransactionPhase::Failed:
+        return backend_ != nullptr;
+    case TokenTransactionPhase::Empty:
+    case TokenTransactionPhase::Committed:
+    case TokenTransactionPhase::RolledBack:
+        return false;
+    }
+
+    return false;
+}
+
+bool TokenTransaction::valid() const noexcept
+{
+    return active();
+}
+
+TokenTransactionSnapshot TokenTransaction::snapshot() const noexcept
+{
+    return TokenTransactionSnapshot{
+        transaction_id_,
+        request_id_,
+        logical_token_position_,
+        layer_count_,
+        next_layer_,
+        phase_,
+    };
+}
+
+EngineKvStatus TokenTransaction::writeLayer(
+    LayerKvWrite const& write)
+{
+    if (!active()) {
+        return status(EngineKvError::InvalidState);
+    }
+    if (phase_ != TokenTransactionPhase::AwaitingLayerWrite
+        || write.layer != next_layer_) {
+        return status(EngineKvError::LayerOutOfOrder);
+    }
+    if (write.device_key == nullptr || write.device_value == nullptr) {
+        return status(EngineKvError::InvalidArgument);
+    }
+
+    EngineKvStatus const result = backend_->writeLayer(write, stream_);
+    if (!result.ok()) {
+        phase_ = TokenTransactionPhase::Failed;
+        return result;
+    }
+
+    phase_ = TokenTransactionPhase::AwaitingLayerAttention;
+    return {};
+}
+
+EngineKvStatus TokenTransaction::attendLayer(
+    PagedDecodeRequest const& request)
+{
+    if (!active()) {
+        return status(EngineKvError::InvalidState);
+    }
+    if (phase_ != TokenTransactionPhase::AwaitingLayerAttention
+        || request.layer != next_layer_) {
+        return status(EngineKvError::LayerOutOfOrder);
+    }
+    if (request.device_query == nullptr
+        || request.device_output == nullptr
+        || request.device_workspace == nullptr
+        || request.workspace_bytes == 0
+        || !(request.attention_scale > 0.0F)) {
+        return status(EngineKvError::InvalidArgument);
+    }
+
+    EngineKvStatus const result = backend_->attendLayer(request, stream_);
+    if (!result.ok()) {
+        phase_ = TokenTransactionPhase::Failed;
+        return result;
+    }
+
+    ++next_layer_;
+    phase_ = next_layer_ == layer_count_
+        ? TokenTransactionPhase::ReadyToCommit
+        : TokenTransactionPhase::AwaitingLayerWrite;
+    return {};
+}
+
+EngineKvStatus TokenTransaction::commit()
+{
+    if (!active() || phase_ != TokenTransactionPhase::ReadyToCommit) {
+        return status(EngineKvError::InvalidState);
+    }
+
+    EngineKvStatus const result = backend_->commit(stream_);
+    if (!result.ok()) {
+        backend_->rollback(stream_);
+        backend_.reset();
+        phase_ = TokenTransactionPhase::RolledBack;
+        return result;
+    }
+
+    backend_.reset();
+    phase_ = TokenTransactionPhase::Committed;
+    return {};
+}
+
+EngineKvStatus TokenTransaction::rollback() noexcept
+{
+    if (!active()) {
+        return status(EngineKvError::InvalidState);
+    }
+
+    rollbackNoexcept();
+    return {};
+}
+
+void TokenTransaction::rollbackNoexcept() noexcept
+{
+    if (!active()) {
+        return;
+    }
+
+    backend_->rollback(stream_);
+    backend_.reset();
+    phase_ = TokenTransactionPhase::RolledBack;
+}
+
+void TokenTransaction::resetMovedFrom() noexcept
+{
+    transaction_id_ = kInvalidTokenTransactionId;
+    request_id_ = kInvalidRequestId;
+    logical_token_position_ = 0;
+    layer_count_ = 0;
+    next_layer_ = 0;
+    phase_ = TokenTransactionPhase::Empty;
+    stream_ = nullptr;
+}
+
+} // namespace kimkvcache
