@@ -33,6 +33,10 @@ endif()
 
 add_subdirectory(src)
 
+if(KIM_KV_ENABLE_CUDA)
+    add_subdirectory(tools)
+endif()
+
 if(KIM_KV_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
 endif()

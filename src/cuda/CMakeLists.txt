@@ -10,6 +10,8 @@ add_library(
         cuda_kv_kernels.cu
         cuda_kv_promotion.cpp
         cuda_kv_storage.cpp
+        cuda_model_kernels.cu
+        cuda_model_runner.cpp
         cuda_submission.cpp
         fixed_cuda_kv_cache.cpp
 )
@@ -36,4 +38,5 @@ target_link_libraries(
     PUBLIC
         kim_kv
         CUDA::cudart
+        CUDA::cublas
 )

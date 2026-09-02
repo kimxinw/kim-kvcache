@@ -53,26 +53,41 @@ Reservation 强制逐层 `Write -> Attend`，并在 Token 边界统一 Commit �
 支持 GQA 和预分配 Workspace；Descriptor 每次 Reserve 只上传一次，逐层调用不执行
 Host Wait，也不分配临时 Attention Buffer。
 
+### 6. TinyLlama FP16 单请求 ModelRunner
+
+模块见 `src/model`、`src/cuda/cuda_model_*` 和 `tools/tinyllama_validate.cpp`。
+离线转换工具将固定 revision 的 TinyLlama BF16 Safetensors 转换为 FP16 二进制和
+带逐 Tensor SHA-256 的版本化 Manifest；C++ Loader 严格校验模型配置、Tensor 集合、
+Shape、Offset、长度和校验和。
+
+ModelRunner 复用 cuBLAS GEMM，并实现 Embedding、RMSNorm、RoPE、Residual、SwiGLU、
+Final RMSNorm、LM Head 和 Greedy Argmax。模型 Workspace 在初始化时一次分配；逐 Token、
+逐 Layer 稳定路径不执行 `cudaMalloc/cudaFree`。每层 Q/K/V 真实进入 Engine KV Transaction
+和直接 Paged Decode Attention，最终 Logits 与 Argmax 成功后才提交该 Token。
+
 ## 验证结果
 
 测试环境为 RTX 3060 12 GiB、TinyLlama 1.1B FP16 和 CUDA 12.6.85。
 
 | 验证项 | 结果 |
 |---|---|
-| CPU Release 契约测试 | `10/10 PASS` |
-| CUDA Release 契约测试 | `16/16 PASS` |
+| CPU Release 契约测试 | `11/11 PASS` |
+| CUDA Release 契约测试 | `18/18 PASS` |
 | CPU ASan/UBSan | `9/9 PASS` |
 | Engine CUDA Sanitizer | memcheck、racecheck、initcheck 全绿 |
 | K6 正式矩阵 | 30 份 CPU + 30 份 CUDA 报告全部成功，193 项 SHA-256 通过 |
 | 容量模型 | 相比 Fixed-64，碎片降低 `88.69%～91.63%`，12 GiB 下 Admission 提升 `6.52%～21.21%` |
 | Long Gather（Nsight Compute） | Hetero `278.590 µs`，Fixed-8 `796.740 µs`，降低 `65.03%` |
 | Promotion 盈亏平衡 | Long 和 Mixed 相对 Fixed-8 均为约 `2` 次后续访问 |
+| TinyLlama FP16 Reference | 首/中/末层与 Final Hidden 均在 `0.05` 绝对误差内；Logits 最大/平均绝对误差 `0.01951/0.00347`；Top-10 `10/10`、逐位置 Greedy Token 全一致 |
 
 完整 Release 结果位于
 `benchmarks/results/f593161df222_20260829T084127Z_k6`，Nsight Compute 结果位于
 `benchmarks/results/701205929a9b_20260829T103733Z_k6_profile`。
 
-当前仅为独立 Metadata/CUDA Data Path Benchmark，不代表端到端模型 Serving 加速。
+上述 K6/Nsight 性能结果仍是独立 Metadata/CUDA Data Path Benchmark，不代表端到端
+模型 Serving 加速。E2 ModelRunner 已形成真实单请求、预 Token 化输入的模型前向闭环；Generation Loop、
+EOS/长度终止、并发 Scheduler 和端到端 Serving 指标仍属于后续阶段。
 
 ## 构建与测试
 
@@ -93,6 +108,34 @@ ctest --preset cuda-release
 ```
 
 `nvcc` 已在 `PATH` 中时可以省略 `CUDACXX`。
+
+## TinyLlama E2 数值验证
+
+使用包含 PyTorch、Transformers 和 Safetensors 的 Python 环境离线转换权重：
+
+```bash
+python scripts/convert_tinyllama_weights.py \
+  --model-dir /path/to/TinyLlama-1.1B-Chat-v1.0 \
+  --output-dir /path/to/converted-model
+```
+
+运行 C++ 单请求 ModelRunner，并与 Transformers FP16 Eager Reference 对照：
+
+```bash
+build-k5-cuda-release/tools/kim_kv_tinyllama_validate \
+  --manifest /path/to/converted-model/tinyllama-1.1b-chat-fp16.manifest \
+  --weights /path/to/converted-model/tinyllama-1.1b-chat-fp16.weights \
+  --tokens 1,450,7483,310,3444,338 \
+  --output /tmp/tinyllama-runtime.json
+
+python scripts/validate_tinyllama_reference.py \
+  --model-dir /path/to/TinyLlama-1.1B-Chat-v1.0 \
+  --runtime-json /tmp/tinyllama-runtime.json \
+  --output /tmp/tinyllama-reference-report.json
+```
+
+已复现的机器可读摘要位于
+`tests/reference/tinyllama_e2_reference_report.json`。
 
 ## Benchmark
 
@@ -127,9 +170,12 @@ build-k5-cuda-release/benchmarks/kim_kv_cuda_benchmark \
 - 单 Token Metadata Reserve/Commit/Rollback 与同 Request 冲突隔离
 - Heterogeneous/Fixed 逐层 CUDA KV Write 和直接 Paged Decode Attention
 - GQA、Micro/Extent 混合页与预分配 Attention Workspace
+- 固定 TinyLlama 1.1B Chat Revision 的 FP16 Manifest/Weight Loader
+- 单请求 ModelRunner、完整 Decoder Layer、LM Head 和 Greedy Argmax
+- 首/中/末层 Hidden、Final Hidden、Logits、Top-K 和逐位置 Token 数值门禁
 
 ## TODO
 
-- TinyLlama FP16 ModelRunner、Generation Loop 与 Iteration Scheduler
+- Generation Loop 与 Iteration Scheduler
 - Fixed/Heterogeneous 端到端正确性和性能对照
 - Nsight Systems GPU Timeline 仍待在兼容环境补采

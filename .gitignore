@@ -7,6 +7,9 @@ CMakeCache.txt
 compile_commands.json
 *.o
 *.a
+*.py[cod]
+*.weights
+__pycache__/
 
 !README.md
 !REPORT.md

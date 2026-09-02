@@ -1,0 +1,72 @@
+{
+  "checkpoint": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+  "checkpoint_revision": "88e648e026e00c9252e31312b7ba8eb2fdd9b7c3",
+  "config_sha256": "486bedda3a6988332e60d9638a09ca4b260d34ebcf1b19e22cf3b140b63d8fe9",
+  "embedding": {
+    "max_absolute_error": 0.0,
+    "max_error_index": 0,
+    "max_relative_error": 0.0,
+    "mean_absolute_error": 0.0
+  },
+  "environment": {
+    "attention_implementation": "eager",
+    "compute_capability": [8, 6],
+    "cuda_runtime": "12.4",
+    "gpu": "NVIDIA GeForce RTX 3060",
+    "reference_dtype": "float16",
+    "torch": "2.5.1+cu124",
+    "transformers": "4.45.1"
+  },
+  "final_hidden_state": {
+    "max_absolute_error": 0.033203125,
+    "max_error_index": 282,
+    "max_relative_error": 3.387019157409668,
+    "mean_absolute_error": 0.002826937474310398
+  },
+  "input_tokens": [1, 450, 7483, 310, 3444, 338],
+  "layers": {
+    "0": {
+      "max_absolute_error": 3.0517578125e-05,
+      "max_error_index": 35,
+      "max_relative_error": 0.476837158203125,
+      "mean_absolute_error": 2.956861862912774e-06
+    },
+    "11": {
+      "max_absolute_error": 0.00146484375,
+      "max_error_index": 411,
+      "max_relative_error": 0.8999999761581421,
+      "mean_absolute_error": 0.00013507716357707977
+    },
+    "21": {
+      "max_absolute_error": 0.015625,
+      "max_error_index": 991,
+      "max_relative_error": 3.387878894805908,
+      "mean_absolute_error": 0.0010647429153323174
+    }
+  },
+  "logits": {
+    "max_absolute_error": 0.01950836181640625,
+    "max_error_index": 19243,
+    "max_relative_error": 8.123760223388672,
+    "mean_absolute_error": 0.0034688711166381836
+  },
+  "passed": true,
+  "reference_greedy_tokens": [529, 29871, 310, 278, 29892, 3681],
+  "reference_top10": [3681, 5982, 29901, 278, 29973, 29892, 29889, 13, 903, 263],
+  "resource_reclaimed": true,
+  "runtime_greedy_tokens": [529, 29871, 310, 278, 29892, 3681],
+  "runtime_memory": {
+    "device_weight_bytes": 2200096768,
+    "device_workspace_bytes": 445696
+  },
+  "runtime_top10": [3681, 5982, 29901, 278, 29973, 29892, 29889, 13, 263, 903],
+  "selected_layers": [0, 11, 21],
+  "thresholds": {
+    "all_greedy_tokens_equal": true,
+    "hidden_max_absolute_error": 0.05,
+    "logits_max_absolute_error": 0.05,
+    "logits_mean_absolute_error": 0.01,
+    "required_top10_overlap": 10
+  },
+  "top10_overlap": 10
+}

@@ -6,6 +6,7 @@ add_library(
         engine/engine_kv.cpp
         fixed/fixed_page_manager.cpp
         fixed/fixed_token_reservation.cpp
+        model/weight_manifest.cpp
         reference/kv_reference.cpp
         runtime/kv_cache_append.cpp
         runtime/kv_cache_inspection.cpp
