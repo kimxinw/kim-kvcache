@@ -53,7 +53,7 @@ float fp32(KvScalar value)
 
 struct TestArchive final {
     TinyLlamaConfig config{
-        8, 16, 2, 4, 2, 2, 16, 32, 1, 2, 1.0e-5F, 10000.0F, false,
+        8, 16, 2, 4, 2, 2, 16, 256, 1, 2, 1.0e-5F, 10000.0F, false,
     };
     std::filesystem::path root{};
     std::filesystem::path manifest_path{};
@@ -418,6 +418,57 @@ struct ReferenceModel final {
     }
 };
 
+std::vector<std::uint32_t> referenceGeneration(
+    TestArchive const& archive,
+    std::vector<std::uint32_t> const& prompt,
+    std::uint32_t max_new_tokens)
+{
+    ReferenceModel reference(archive);
+    std::uint32_t next_token = 0;
+    for (std::uint32_t position = 0; position < prompt.size(); ++position) {
+        std::vector<float> const logits = reference.forward(
+            prompt[position], position
+        );
+        next_token = static_cast<std::uint32_t>(
+            std::max_element(logits.begin(), logits.end()) - logits.begin()
+        );
+    }
+
+    std::vector<std::uint32_t> output;
+    output.reserve(max_new_tokens);
+    for (std::uint32_t generated = 0;
+         generated < max_new_tokens;
+         ++generated) {
+        output.push_back(next_token);
+        if (generated + 1 != max_new_tokens) {
+            std::uint32_t const position = static_cast<std::uint32_t>(
+                prompt.size()
+            ) + generated;
+            std::vector<float> const logits = reference.forward(
+                next_token, position
+            );
+            next_token = static_cast<std::uint32_t>(
+                std::max_element(logits.begin(), logits.end()) - logits.begin()
+            );
+        }
+    }
+    return output;
+}
+
+std::uint32_t eosOutside(
+    std::vector<std::uint32_t> const& tokens,
+    std::uint32_t vocabulary_size)
+{
+    for (std::uint32_t candidate = 0;
+         candidate < vocabulary_size;
+         ++candidate) {
+        if (std::find(tokens.begin(), tokens.end(), candidate) == tokens.end()) {
+            return candidate;
+        }
+    }
+    return vocabulary_size;
+}
+
 void testModelRunner()
 {
     TestArchive archive(
@@ -551,11 +602,109 @@ void testModelRunner()
     expect(cudaStreamDestroy(stream) == cudaSuccess, "destroy model stream");
 }
 
+void testGenerationRuntime()
+{
+    TestArchive archive(
+        std::filesystem::temp_directory_path()
+            / "kim_kv_generation_runtime_cuda_contract"
+    );
+    cudaStream_t stream = nullptr;
+    expect(cudaStreamCreate(&stream) == cudaSuccess,
+        "create generation stream");
+    std::size_t const attention_workspace =
+        archive.config.attention_head_count
+        * archive.config.max_position_embeddings * sizeof(float);
+    EngineKvConfig const kv_config{
+        KvLayout{
+            archive.config.layer_count,
+            archive.config.kv_head_count,
+            archive.config.head_dimension,
+        },
+        archive.config.attention_head_count,
+        attention_workspace,
+    };
+    std::unique_ptr<EngineKvBackend> backend =
+        createHeterogeneousCudaEngineKvBackend(kv_config, 64, 4);
+    expect(backend != nullptr, "create generation KV backend");
+    if (backend == nullptr) {
+        static_cast<void>(cudaStreamDestroy(stream));
+        return;
+    }
+
+    CudaModelRunnerCreateResult created = createCudaTinyLlamaModelRunner(
+        archive.manifest_path.string(),
+        archive.data_path.string(),
+        *backend,
+        reinterpret_cast<EngineStream>(stream)
+    );
+    expect(created.ok(), std::string("create generation model runner: ")
+        + created.status.detail);
+    if (!created.ok()) {
+        static_cast<void>(cudaStreamDestroy(stream));
+        return;
+    }
+    SingleRequestGenerationRuntime runtime(*backend, *created.runner);
+
+    struct Workload final {
+        RequestId request_id;
+        std::uint32_t input_length;
+        std::uint32_t output_length;
+    };
+    std::vector<Workload> const workloads{{51, 32, 1}, {52, 128, 32}};
+    for (Workload const& workload : workloads) {
+        std::vector<std::uint32_t> input(workload.input_length);
+        for (std::uint32_t index = 0; index < workload.input_length; ++index) {
+            input[index] = (index * 5 + 1) % archive.config.vocabulary_size;
+        }
+        std::vector<std::uint32_t> const expected = referenceGeneration(
+            archive, input, workload.output_length
+        );
+        std::uint32_t const eos = eosOutside(
+            expected, archive.config.vocabulary_size
+        );
+        expect(eos < archive.config.vocabulary_size,
+            "generation reference leaves an EOS sentinel");
+        if (eos >= archive.config.vocabulary_size) {
+            continue;
+        }
+
+        GenerationTerminal terminal = runtime.generate(GenerationRequest{
+            workload.request_id,
+            input,
+            SamplingConfig{workload.output_length, eos},
+            {},
+        });
+        expect(terminal.ok(), std::string("CUDA generation succeeds: ")
+            + terminal.detail);
+        expect(terminal.reason == GenerationTerminalReason::MaxNewTokens,
+            "CUDA generation reaches the length terminal");
+        expect(terminal.output_token_ids == expected,
+            "CUDA generation tokens match independent CPU FP16 reference");
+        expect(terminal.usage.prompt_tokens == workload.input_length
+            && terminal.usage.completion_tokens == workload.output_length,
+            "CUDA generation reports prompt and completion usage");
+        expect(terminal.metrics.e2e_ns >= terminal.metrics.ttft_ns,
+            "CUDA generation E2E includes TTFT");
+        EngineKvBackendSnapshot const snapshot = backend->snapshot();
+        expect(snapshot.request_count == 0
+            && snapshot.active_transaction_count == 0
+            && snapshot.committed_token_count == 0,
+            "CUDA generation releases request, transaction, and committed KV");
+        expect(backend->checkInvariants(),
+            "CUDA generation preserves backend invariants");
+    }
+
+    created.runner.reset();
+    expect(cudaStreamDestroy(stream) == cudaSuccess,
+        "destroy generation stream");
+}
+
 } // namespace
 
 int main()
 {
     testModelRunner();
+    testGenerationRuntime();
     if (failures == 0) {
         std::cout << "CUDA model runner contract passed\n";
     }

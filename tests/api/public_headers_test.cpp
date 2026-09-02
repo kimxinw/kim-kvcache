@@ -10,6 +10,7 @@
 #include "kim-kv/cuda/cuda_status.h"
 #include "kim-kv/cuda/fixed_cuda_kv_cache.h"
 #include "kim-kv/engine/engine_kv.h"
+#include "kim-kv/engine/generation.h"
 #include "kim-kv/cuda/cuda_engine_kv_backend.h"
 #include "kim-kv/fixed/fixed_page_manager.h"
 #include "kim-kv/model/tinyllama_config.h"

@@ -1,0 +1,17 @@
+{
+  "checkpoint": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+  "checkpoint_revision": "88e648e026e00c9252e31312b7ba8eb2fdd9b7c3",
+  "input_tokens": [1],
+  "max_new_tokens": 1,
+  "eos_token_id": 0,
+  "output_tokens": [529],
+  "terminal_reason": "max_new_tokens",
+  "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+  "metrics_ns": {"ttft": 321438349, "tpot": 0, "e2e": 321439849},
+  "repetitions": 100,
+  "outputs_consistent": true,
+  "resources_reclaimed": true,
+  "gpu_free_bytes_after_warmup": 9385803776,
+  "gpu_free_bytes_after_repetitions": 9385803776,
+  "gpu_free_bytes_delta": 0
+}

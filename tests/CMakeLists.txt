@@ -56,6 +56,14 @@ add_kim_kv_contract(
 )
 
 add_kim_kv_contract(
+    generation_runtime_test
+    generation_runtime_contract
+    engine/generation_runtime_test.cpp
+    10
+    kim_kv
+)
+
+add_kim_kv_contract(
     weight_manifest_test
     weight_manifest_contract
     model/weight_manifest_test.cpp

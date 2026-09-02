@@ -10,3 +10,16 @@ target_link_libraries(
         kim_kv_cuda
         CUDA::cudart
 )
+
+add_executable(
+    kim_kv_tinyllama_generate
+    tinyllama_generate.cpp
+)
+
+target_link_libraries(
+    kim_kv_tinyllama_generate
+    PRIVATE
+        kim_kv_warnings
+        kim_kv_cuda
+        CUDA::cudart
+)
