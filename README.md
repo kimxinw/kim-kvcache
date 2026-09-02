@@ -42,14 +42,27 @@ Copy-on-Write。Page Lease 保证异步 CUDA 工作完成前页面槽位不会�
 Fixed-8/16/32/64 CPU 与 CUDA 运行时，并与 Hetero-8/64 使用相同 Workload、
 数据布局和 CUDA Event 计时边界。
 
+### 5. Engine-facing 逐层 KV 事务
+
+模块见 `src/engine`、`src/runtime/token_reservation.cpp`、
+`src/fixed/fixed_token_reservation.cpp` 和 `src/cuda/cuda_engine_*`。Heterogeneous
+与 Fixed 后端共同实现 `EngineKvBackend`，以不可见的单 Token Metadata
+Reservation 强制逐层 `Write -> Attend`，并在 Token 边界统一 Commit 或 Rollback。
+
+直接 Paged Decode Attention 按 Device Block Descriptor 遍历 Micro/Extent Page，
+支持 GQA 和预分配 Workspace；Descriptor 每次 Reserve 只上传一次，逐层调用不执行
+Host Wait，也不分配临时 Attention Buffer。
+
 ## 验证结果
 
 测试环境为 RTX 3060 12 GiB、TinyLlama 1.1B FP16 和 CUDA 12.6.85。
 
 | 验证项 | 结果 |
 |---|---|
-| CPU Release 契约测试 | `9/9 PASS` |
-| CUDA Release 契约测试 | `14/14 PASS` |
+| CPU Release 契约测试 | `10/10 PASS` |
+| CUDA Release 契约测试 | `16/16 PASS` |
+| CPU ASan/UBSan | `9/9 PASS` |
+| Engine CUDA Sanitizer | memcheck、racecheck、initcheck 全绿 |
 | K6 正式矩阵 | 30 份 CPU + 30 份 CUDA 报告全部成功，193 项 SHA-256 通过 |
 | 容量模型 | 相比 Fixed-64，碎片降低 `88.69%～91.63%`，12 GiB 下 Admission 提升 `6.52%～21.21%` |
 | Long Gather（Nsight Compute） | Hetero `278.590 µs`，Fixed-8 `796.740 µs`，降低 `65.03%` |
@@ -111,10 +124,12 @@ build-k5-cuda-release/benchmarks/kim_kv_cuda_benchmark \
 - 事务式 Promotion
 - 可复现 Benchmark
 - Engine-facing KV 接口与 move-only Token Transaction 契约
+- 单 Token Metadata Reserve/Commit/Rollback 与同 Request 冲突隔离
+- Heterogeneous/Fixed 逐层 CUDA KV Write 和直接 Paged Decode Attention
+- GQA、Micro/Extent 混合页与预分配 Attention Workspace
 
 ## TODO
 
-- 逐层 KV metadata 事务与直接 Paged Decode Attention
 - TinyLlama FP16 ModelRunner、Generation Loop 与 Iteration Scheduler
 - Fixed/Heterogeneous 端到端正确性和性能对照
 - Nsight Systems GPU Timeline 仍待在兼容环境补采

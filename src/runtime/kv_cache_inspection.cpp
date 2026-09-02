@@ -53,6 +53,7 @@ KvCacheManagerSnapshot KvCacheManager::snapshot() const
         static_cast<std::uint64_t>(requests_.size()),
         static_cast<std::uint64_t>(promotions_.size()),
         static_cast<std::uint64_t>(page_leases_.size()),
+        static_cast<std::uint64_t>(token_reservations_.size()),
         micro_pool_.snapshot(),
         extent_pool_.snapshot(),
     };

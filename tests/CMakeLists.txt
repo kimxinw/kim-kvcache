@@ -56,6 +56,14 @@ add_kim_kv_contract(
 )
 
 add_kim_kv_contract(
+    token_reservation_test
+    token_reservation_contract
+    runtime/token_reservation_test.cpp
+    10
+    kim_kv
+)
+
+add_kim_kv_contract(
     fixed_page_test
     fixed_page_contract
     runtime/fixed_page_test.cpp
@@ -92,6 +100,15 @@ if(KIM_KV_ENABLE_CUDA)
         cuda_kv_test
         cuda_kv_contract
         cuda/cuda_kv_test.cpp
+        60
+        kim_kv_cuda
+        CUDA::cudart
+    )
+
+    add_kim_kv_contract(
+        cuda_engine_kv_backend_test
+        cuda_engine_kv_backend_contract
+        cuda/cuda_engine_kv_backend_test.cpp
         60
         kim_kv_cuda
         CUDA::cudart

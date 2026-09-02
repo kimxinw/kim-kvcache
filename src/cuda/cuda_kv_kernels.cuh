@@ -90,4 +90,44 @@ void launchAttentionOutput(
     cudaStream_t stream
 );
 
+void launchCopyLayerTokens(
+    KvScalar const* source,
+    std::uint32_t source_capacity,
+    KvScalar* target,
+    std::uint32_t target_capacity,
+    std::uint32_t token_count,
+    std::uint32_t layer,
+    DeviceLayout layout,
+    cudaStream_t stream
+);
+
+void launchWriteLayerToken(
+    KvScalar const* key,
+    KvScalar const* value,
+    KvScalar* target,
+    std::uint32_t target_capacity,
+    std::uint32_t target_token,
+    std::uint32_t layer,
+    DeviceLayout layout,
+    cudaStream_t stream
+);
+
+void launchPagedDecodeAttention(
+    ::kimkvcache::DeviceBlockDescriptor const* descriptors,
+    std::uint32_t descriptor_count,
+    KvScalar const* micro_pool,
+    std::size_t micro_page_elements,
+    KvScalar const* extent_pool,
+    std::size_t extent_page_elements,
+    std::uint32_t token_count,
+    std::uint32_t layer,
+    std::uint32_t query_head_count,
+    KvScalar const* query,
+    float* scores,
+    KvScalar* output,
+    float attention_scale,
+    DeviceLayout layout,
+    cudaStream_t stream
+);
+
 } // namespace kimkvcache::cuda_detail

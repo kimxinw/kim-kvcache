@@ -5,6 +5,7 @@
 #include "kim-kv/core/page_state.h"
 #include "kim-kv/runtime/page_lease.h"
 #include "kim-kv/runtime/promotion.h"
+#include "kim-kv/runtime/token_reservation.h"
 
 #include <array>
 #include <cstddef>
@@ -35,6 +36,7 @@ struct KvCacheManagerSnapshot final {
     std::uint64_t request_count{0};
     std::uint64_t promotion_count{0};
     std::uint64_t page_lease_count{0};
+    std::uint64_t token_reservation_count{0};
     PagePoolSnapshot micro_pool{};
     PagePoolSnapshot extent_pool{};
 };
@@ -59,6 +61,19 @@ public:
     [[nodiscard]] KvCacheError append(
         RequestId request_id,
         std::uint32_t token_count
+    );
+
+    [[nodiscard]] TokenReservationResult reserveToken(
+        RequestId request_id,
+        std::uint32_t expected_committed_tokens
+    );
+
+    [[nodiscard]] KvCacheError commitTokenReservation(
+        KvTokenReservationId reservation_id
+    );
+
+    [[nodiscard]] KvCacheError rollbackTokenReservation(
+        KvTokenReservationId reservation_id
     );
 
     [[nodiscard]] KvCacheError sealTail(RequestId request_id);
@@ -96,6 +111,10 @@ public:
     // 该租约必须覆盖 CUDA Copy 从提交到 Event 完成的整个区间。
     [[nodiscard]] PageLeaseAcquireResult acquirePromotionIoLease(
         PromotionId promotion_id
+    );
+
+    [[nodiscard]] PageLeaseAcquireResult acquireTokenReservationLease(
+        KvTokenReservationId reservation_id
     );
 
     [[nodiscard]] KvCacheError releasePageLease(
@@ -147,6 +166,16 @@ private:
         PageHandle target_handle{PageHandle::invalid()};
     };
 
+    struct TokenReservation final {
+        KvTokenReservationId reservation_id{kInvalidKvTokenReservationId};
+        RequestId request_id{kInvalidRequestId};
+        std::uint64_t prepared_table_version{0};
+        BlockTable candidate{};
+        PageHandle staged_target{PageHandle::invalid()};
+        PageHandle existing_mutable{PageHandle::invalid()};
+        PageHandle replaced_sealed_tail{PageHandle::invalid()};
+    };
+
     struct PageLease final {
         PageLeaseId lease_id{kInvalidPageLeaseId};
         std::vector<PageHandle> handles{};
@@ -178,6 +207,9 @@ private:
 
     [[nodiscard]] PromotionId allocatePromotionIdLocked();
 
+    [[nodiscard]] KvTokenReservationId
+    allocateTokenReservationIdLocked();
+
     [[nodiscard]] PageLeaseId allocatePageLeaseIdLocked();
 
     [[nodiscard]] PageLeaseAcquireResult acquirePageLeaseLocked(
@@ -188,6 +220,14 @@ private:
     [[nodiscard]] KvCacheError rollbackPromotionLocked(
         PromotionId promotion_id
     );
+
+    [[nodiscard]] KvCacheError rollbackTokenReservationLocked(
+        KvTokenReservationId reservation_id
+    );
+
+    [[nodiscard]] bool hasTokenReservationLocked(
+        RequestId request_id
+    ) const noexcept;
 
     [[nodiscard]] KvCacheError rollbackPromotionsForRequestLocked(
         RequestId request_id
@@ -201,6 +241,9 @@ private:
         InvariantCounters& expected) const;
 
     [[nodiscard]] bool checkPromotionInvariantsLocked(
+        InvariantCounters& expected) const;
+
+    [[nodiscard]] bool checkTokenReservationInvariantsLocked(
         InvariantCounters& expected) const;
 
     [[nodiscard]] bool checkLeaseInvariantsLocked(
@@ -220,9 +263,14 @@ private:
 
     std::unordered_map<RequestId, RequestState> requests_;
     std::unordered_map<PromotionId, PromotionTransaction> promotions_;
+    std::unordered_map<KvTokenReservationId, TokenReservation>
+        token_reservations_;
+    std::unordered_map<RequestId, KvTokenReservationId>
+        request_token_reservations_;
     std::unordered_map<PageLeaseId, PageLease> page_leases_;
 
     PromotionId next_promotion_id_{1};
+    KvTokenReservationId next_token_reservation_id_{1};
     PageLeaseId next_page_lease_id_{1};
 
     mutable std::mutex mutex_;

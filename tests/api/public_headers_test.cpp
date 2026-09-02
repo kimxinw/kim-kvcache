@@ -9,6 +9,7 @@
 #include "kim-kv/cuda/cuda_status.h"
 #include "kim-kv/cuda/fixed_cuda_kv_cache.h"
 #include "kim-kv/engine/engine_kv.h"
+#include "kim-kv/cuda/cuda_engine_kv_backend.h"
 #include "kim-kv/fixed/fixed_page_manager.h"
 #include "kim-kv/kim_kv.h"
 #include "kim-kv/reference/kv_layout.h"

@@ -2,6 +2,7 @@
 
 #include "kim-kv/core/block_table.h"
 #include "kim-kv/cuda/cuda_status.h"
+#include "kim-kv/engine/engine_kv.h"
 #include "kim-kv/reference/kv_layout.h"
 #include "kim-kv/runtime/promotion.h"
 
@@ -26,6 +27,44 @@ struct CudaStorageSnapshot final {
     [[nodiscard]] constexpr std::size_t totalReservedBytes() const noexcept
     {
         return micro_reserved_bytes + extent_reserved_bytes;
+    }
+};
+
+// Owns one Reserve -> per-layer Write/Attend -> token-boundary completion
+// sequence. Descriptor upload happens once at construction; layer calls only
+// enqueue work on the bound stream and never wait on the host.
+class CudaEngineTransaction final {
+public:
+    struct Impl;
+
+    ~CudaEngineTransaction();
+    CudaEngineTransaction(CudaEngineTransaction const&) = delete;
+    CudaEngineTransaction& operator=(CudaEngineTransaction const&) = delete;
+    CudaEngineTransaction(CudaEngineTransaction&&) noexcept;
+    CudaEngineTransaction& operator=(CudaEngineTransaction&&) noexcept;
+
+    [[nodiscard]] CudaStatus status() const noexcept;
+    [[nodiscard]] CudaStatus writeLayer(
+        LayerKvWrite const& write
+    ) noexcept;
+    [[nodiscard]] CudaStatus attendLayer(
+        PagedDecodeRequest const& request
+    ) noexcept;
+    [[nodiscard]] CudaStatus finish() noexcept;
+
+private:
+    explicit CudaEngineTransaction(std::unique_ptr<Impl> impl) noexcept;
+    std::unique_ptr<Impl> impl_;
+    friend class CudaKvStorage;
+};
+
+struct CudaEngineTransactionBeginResult final {
+    CudaStatus status{};
+    std::unique_ptr<CudaEngineTransaction> transaction{};
+
+    [[nodiscard]] bool ok() const noexcept
+    {
+        return status.ok() && transaction != nullptr;
     }
 };
 
@@ -113,6 +152,13 @@ public:
         BlockTable const& table,
         float const* device_query,
         float* device_output,
+        CudaStream stream = nullptr
+    );
+
+    [[nodiscard]] CudaEngineTransactionBeginResult beginEngineTransaction(
+        BlockTable const& before,
+        BlockTable const& reserved,
+        std::uint32_t query_head_count,
         CudaStream stream = nullptr
     );
 

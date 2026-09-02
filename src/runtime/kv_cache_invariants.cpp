@@ -98,6 +98,7 @@ bool KvCacheManager::checkInvariantsLocked() const
     );
     return checkRequestInvariantsLocked(expected)
         && checkPromotionInvariantsLocked(expected)
+        && checkTokenReservationInvariantsLocked(expected)
         && checkLeaseInvariantsLocked(expected)
         && checkPoolInvariantsLocked(
             PageKind::Micro,
@@ -111,6 +112,99 @@ bool KvCacheManager::checkInvariantsLocked() const
             extent_runtime_,
             expected
         );
+}
+
+bool KvCacheManager::checkTokenReservationInvariantsLocked(
+    InvariantCounters& expected) const
+{
+    if (request_token_reservations_.size() != token_reservations_.size()) {
+        return false;
+    }
+    for (auto const& [reservation_id, transaction] : token_reservations_) {
+        if (reservation_id == kInvalidKvTokenReservationId
+            || transaction.reservation_id != reservation_id
+            || transaction.request_id == kInvalidRequestId
+            || !transaction.candidate.checkInvariants()) {
+            return false;
+        }
+        auto const request_iterator = requests_.find(transaction.request_id);
+        auto const request_reservation = request_token_reservations_.find(
+            transaction.request_id
+        );
+        if (request_iterator == requests_.end()
+            || request_reservation == request_token_reservations_.end()
+            || request_reservation->second != reservation_id) {
+            return false;
+        }
+        BlockTable const& before = request_iterator->second.table;
+        if (before.version() != transaction.prepared_table_version
+            || transaction.candidate.version() != before.version() + 1
+            || transaction.candidate.tokenCount()
+                != before.tokenCount() + 1) {
+            return false;
+        }
+
+        std::uint32_t mode_count =
+            static_cast<std::uint32_t>(
+                transaction.staged_target.isStructurallyValid())
+            + static_cast<std::uint32_t>(
+                transaction.existing_mutable.isStructurallyValid());
+        if (mode_count != 1) {
+            return false;
+        }
+        if (transaction.staged_target.isStructurallyValid()) {
+            RuntimeSlot const* target = runtimeSlotLocked(
+                transaction.staged_target
+            );
+            auto& targets = expected.targets(PageKind::Micro);
+            if (target == nullptr
+                || target->state != PageState::CopyTarget
+                || target->ref_count != 0
+                || target->promotion_pins != 0
+                || target->mutable_owner != kInvalidRequestId
+                || transaction.staged_target.slot >= targets.size()
+                || targets[transaction.staged_target.slot] != 0) {
+                return false;
+            }
+            std::uint16_t const expected_staged_tokens =
+                transaction.replaced_sealed_tail.isStructurallyValid()
+                ? static_cast<std::uint16_t>(
+                    transaction.candidate.entries().back().valid_tokens - 1)
+                : 0;
+            if (target->valid_tokens != expected_staged_tokens) {
+                return false;
+            }
+            targets[transaction.staged_target.slot] = 1;
+        }
+        if (transaction.existing_mutable.isStructurallyValid()) {
+            RuntimeSlot const* existing = runtimeSlotLocked(
+                transaction.existing_mutable
+            );
+            if (existing == nullptr
+                || existing->state != PageState::Mutable
+                || existing->ref_count != 1
+                || existing->mutable_owner != transaction.request_id
+                || before.entries().empty()
+                || before.entries().back().handle
+                    != transaction.existing_mutable) {
+                return false;
+            }
+        }
+        if (transaction.replaced_sealed_tail.isStructurallyValid()) {
+            RuntimeSlot const* replaced = runtimeSlotLocked(
+                transaction.replaced_sealed_tail
+            );
+            if (replaced == nullptr
+                || replaced->state != PageState::Sealed
+                || replaced->ref_count == 0
+                || before.entries().empty()
+                || before.entries().back().handle
+                    != transaction.replaced_sealed_tail) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool KvCacheManager::checkRequestInvariantsLocked(
@@ -370,12 +464,16 @@ bool KvCacheManager::checkPoolInvariantsLocked(
             }
             break;
         case PageState::CopyTarget:
-            if (kind != PageKind::Extent
-                || !is_expected_target
+            if (!is_expected_target
                 || runtime.ref_count != 0
-                || runtime.valid_tokens != capacity
                 || runtime.promotion_pins != 0
                 || runtime.mutable_owner != kInvalidRequestId) {
+                return false;
+            }
+            if ((kind == PageKind::Extent
+                    && runtime.valid_tokens != capacity)
+                || (kind == PageKind::Micro
+                    && runtime.valid_tokens >= capacity)) {
                 return false;
             }
             break;

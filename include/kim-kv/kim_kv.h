@@ -14,3 +14,4 @@
 #include "kim-kv/runtime/kv_cache_manager.h"
 #include "kim-kv/runtime/page_lease.h"
 #include "kim-kv/runtime/promotion.h"
+#include "kim-kv/runtime/token_reservation.h"

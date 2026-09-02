@@ -5,6 +5,7 @@ add_library(
         core/page_pool.cpp
         engine/engine_kv.cpp
         fixed/fixed_page_manager.cpp
+        fixed/fixed_token_reservation.cpp
         reference/kv_reference.cpp
         runtime/kv_cache_append.cpp
         runtime/kv_cache_inspection.cpp
@@ -13,6 +14,7 @@ add_library(
         runtime/kv_cache_manager.cpp
         runtime/page_lease.cpp
         runtime/promotion.cpp
+        runtime/token_reservation.cpp
 )
 
 target_include_directories(
