@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kim-kv/engine/generation.h"
 #include "kim-kv/engine/engine_kv.h"
 #include "kim-kv/model/tinyllama_config.h"
 #include "kim-kv/reference/kv_layout.h"
@@ -89,9 +90,13 @@ struct ModelTokenResult final {
     }
 };
 
+struct ModelRunnerOutputOptions final {
+    bool copy_logits{true};
+};
+
 struct CudaModelRunnerCreateResult;
 
-class CudaTinyLlamaModelRunner final {
+class CudaTinyLlamaModelRunner final : public GenerationModelRunner {
 public:
     struct Impl;
 
@@ -115,8 +120,16 @@ public:
         RequestId request_id,
         std::uint32_t token_id,
         std::uint32_t expected_position,
-        ModelRunnerDebugCapture* debug_capture = nullptr
+        ModelRunnerDebugCapture* debug_capture = nullptr,
+        ModelRunnerOutputOptions output_options = {}
     );
+
+    [[nodiscard]] TinyLlamaConfig generationConfig() const noexcept override;
+    [[nodiscard]] GenerationStepResult generationForwardToken(
+        RequestId request_id,
+        std::uint32_t token_id,
+        std::uint32_t expected_position
+    ) override;
 
 private:
     explicit CudaTinyLlamaModelRunner(std::unique_ptr<Impl> impl) noexcept;

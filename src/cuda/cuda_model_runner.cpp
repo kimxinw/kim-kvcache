@@ -295,7 +295,8 @@ ModelTokenResult CudaTinyLlamaModelRunner::forwardToken(
     RequestId request_id,
     std::uint32_t token_id,
     std::uint32_t expected_position,
-    ModelRunnerDebugCapture* debug_capture)
+    ModelRunnerDebugCapture* debug_capture,
+    ModelRunnerOutputOptions output_options)
 {
     ModelTokenResult result;
     if (impl_ == nullptr || impl_->backend == nullptr) {
@@ -318,7 +319,9 @@ ModelTokenResult CudaTinyLlamaModelRunner::forwardToken(
 
     std::unordered_map<std::uint32_t, std::size_t> capture_indices;
     try {
-        result.logits.resize(config.vocabulary_size);
+        if (output_options.copy_logits) {
+            result.logits.resize(config.vocabulary_size);
+        }
         if (debug_capture != nullptr) {
             debug_capture->embedding.resize(config.hidden_size);
             debug_capture->final_hidden_state.resize(config.hidden_size);
@@ -598,13 +601,16 @@ ModelTokenResult CudaTinyLlamaModelRunner::forwardToken(
         return result;
     }
 
-    cudaError_t copied = cudaMemcpyAsync(
-        result.logits.data(),
-        logits,
-        result.logits.size() * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        impl_->stream
-    );
+    cudaError_t copied = cudaSuccess;
+    if (output_options.copy_logits) {
+        copied = cudaMemcpyAsync(
+            result.logits.data(),
+            logits,
+            result.logits.size() * sizeof(float),
+            cudaMemcpyDeviceToHost,
+            impl_->stream
+        );
+    }
     if (copied == cudaSuccess) {
         copied = cudaMemcpyAsync(
             &result.greedy_token_id,
@@ -635,6 +641,28 @@ ModelTokenResult CudaTinyLlamaModelRunner::forwardToken(
     }
     result.status = {};
     return result;
+}
+
+TinyLlamaConfig CudaTinyLlamaModelRunner::generationConfig() const noexcept
+{
+    return config();
+}
+
+GenerationStepResult CudaTinyLlamaModelRunner::generationForwardToken(
+    RequestId request_id,
+    std::uint32_t token_id,
+    std::uint32_t expected_position)
+{
+    ModelTokenResult result = forwardToken(
+        request_id,
+        token_id,
+        expected_position,
+        nullptr,
+        ModelRunnerOutputOptions{false}
+    );
+    return GenerationStepResult{
+        result.ok(), result.greedy_token_id, std::move(result.status.detail),
+    };
 }
 
 CudaModelRunnerCreateResult createCudaTinyLlamaModelRunner(
