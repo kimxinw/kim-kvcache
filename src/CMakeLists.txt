@@ -5,6 +5,7 @@ add_library(
         core/page_pool.cpp
         engine/engine_kv.cpp
         engine/generation.cpp
+        engine/iteration_scheduler.cpp
         fixed/fixed_page_manager.cpp
         fixed/fixed_token_reservation.cpp
         model/weight_manifest.cpp

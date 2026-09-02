@@ -1,18 +1,20 @@
 # kim-kvcache
 
 基于 C++/CUDA 的最小 LLM 推理运行时。项目以异构 Paged KV Cache 为核心，完成
-TinyLlama 1.1B FP16 的逐 Token 前向、Greedy Generation 和资源生命周期管理。
+TinyLlama 1.1B FP16 的逐 Token 前向、Greedy Generation、Iteration Scheduler 和
+资源生命周期管理。
 
 ```mermaid
 graph LR
-    A[Token IDs] --> B[Generation Loop]
-    B --> C[TinyLlama ModelRunner]
-    C --> D[KV Transaction]
-    D --> E[8-Token Micro Page]
-    D --> F[64-Token Extent Page]
-    E --> G[Paged Decode Attention]
-    F --> G
-    G --> B
+    A[Token IDs] --> B[Iteration Scheduler]
+    B --> C[Generation Step]
+    C --> D[TinyLlama ModelRunner]
+    D --> E[KV Transaction]
+    E --> F[8-Token Micro Page]
+    E --> G[64-Token Extent Page]
+    F --> H[Paged Decode Attention]
+    G --> H
+    H --> B
 ```
 
 ## 特性
@@ -32,11 +34,15 @@ Fixed-8/16/32/64 对照实现。
 TinyLlama ModelRunner 使用 FP16 权重、cuBLAS GEMM 和 CUDA 算子实现完整 Decoder、
 LM Head 与 Greedy Argmax。权重 Manifest 记录 Shape、Offset 和逐 Tensor SHA-256。
 
-### 3. 单请求 Generation Loop
+### 3. Generation Loop 与 Iteration Scheduler
 
 支持预 Token 化输入、`max_new_tokens`、EOS、取消和 Runtime Stop，完成
 `Prefill -> Decode -> Terminal`。每个请求返回唯一终态、Usage、TTFT、TPOT 和 E2E，
 退出后统一回收 KV 资源。
+
+`IterationSchedulerRuntime` 使用 FIFO 轮转在 Token 边界动态加入和退出请求，支持
+`c1/c2/c4`、请求取消、跨请求失败隔离、Stop 排空，以及活动请求、每轮 Token 和 KV
+Token 三类预算。第一版在共享 ModelRunner/Stream 上逐请求推进，不宣称融合 Batch Kernel。
 
 ## 验证结果
 
@@ -44,11 +50,12 @@ LM Head 与 Greedy Argmax。权重 Manifest 记录 Shape、Offset 和逐 Tensor 
 
 | 验证项 | 结果 |
 |---|---|
-| CPU / CUDA Release | `12/12 PASS` / `19/19 PASS` |
-| CPU ASan/UBSan | `11/11 PASS` |
+| CPU / CUDA Release | `13/13 PASS` / `20/20 PASS` |
+| CPU ASan/UBSan | `12/12 PASS` |
 | CUDA Sanitizer | memcheck、racecheck、initcheck 均为 `0 errors` |
 | TinyLlama 数值 | Hidden/Logits 通过误差门禁，Top-10 `10/10` |
 | Generation | ISL32/128、OSL32 Token 与 Transformers FP16 全一致 |
+| Scheduler | CUDA 小模型 c1/c2/c4 Token 与独立 FP16 Reference 全一致 |
 | 资源稳定性 | 真实模型连续 100 次结果一致，KV 归零，GPU 空闲显存差值 `0` |
 | Long Gather | Hetero 相比 Fixed-8 降低 `65.03%` |
 | 容量模型 | 相比 Fixed-64，碎片降低 `88.69%～91.63%` |
@@ -93,9 +100,9 @@ KV Benchmark 可通过 `scripts/run_k6_release_matrix.sh` 运行。
 
 ## 当前范围
 
-当前实现为单 GPU、单模型、单请求同步 Generation Runtime。
+当前实现为单 GPU、单模型、同步 Iteration Scheduler；每轮在共享 Stream 上串行推进
+最多 `max_batched_tokens` 个请求。尚未实现融合/并行 Batch Model Forward。
 
 ## TODO
-- c1/c2/c4 Iteration Scheduler；
 - Fixed/Heterogeneous 端到端模型对照；
 - 正式 TTFT、TPOT 和吞吐 Benchmark。

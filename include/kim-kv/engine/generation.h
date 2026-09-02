@@ -150,8 +150,8 @@ protected:
 };
 
 // E3 owns exactly one synchronous request at a time. stop() is thread-safe and
-// is observed at token boundaries; E4 will add admission and batching around
-// this contract rather than changing its terminal/resource semantics.
+// is observed at token boundaries. The iteration scheduler builds admission
+// and multi-request lifecycle semantics around this unchanged E3 contract.
 class SingleRequestGenerationRuntime final {
 public:
     SingleRequestGenerationRuntime(
