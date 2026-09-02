@@ -231,6 +231,10 @@ KvCacheError FixedPageManager::append(
         return KvCacheError::RequestNotFound;
     }
 
+    if (hasTokenReservationLocked(request_id)) {
+        return KvCacheError::RequestConflict;
+    }
+
     RequestState& request = request_iterator->second;
     std::uint32_t const old_token_count = request.table.tokenCount();
 
@@ -435,6 +439,10 @@ KvCacheError FixedPageManager::sealTail(RequestId request_id)
         return KvCacheError::RequestNotFound;
     }
 
+    if (hasTokenReservationLocked(request_id)) {
+        return KvCacheError::RequestConflict;
+    }
+
     BlockTable& table = request_iterator->second.table;
 
     if (table.entries_.empty()) {
@@ -482,6 +490,10 @@ KvCacheError FixedPageManager::forkRequest(
 
     if (source_iterator == requests_.end()) {
         return KvCacheError::RequestNotFound;
+    }
+
+    if (hasTokenReservationLocked(source_request_id)) {
+        return KvCacheError::RequestConflict;
     }
 
     if (requests_.find(child_request_id) != requests_.end()) {
@@ -560,6 +572,10 @@ KvCacheError FixedPageManager::releaseRequest(RequestId request_id)
         return KvCacheError::RequestNotFound;
     }
 
+    if (hasTokenReservationLocked(request_id)) {
+        return KvCacheError::RequestConflict;
+    }
+
     BlockTable const& table = request_iterator->second.table;
 
     for (MappingEntry const& entry : table.entries_) {
@@ -611,6 +627,7 @@ FixedPageManagerSnapshot FixedPageManager::snapshot() const
     result.pool = pool_.snapshot();
     result.successful_allocations = result.pool.successful_allocations;
     result.peak_allocated_pages = peak_allocated_pages_;
+    result.token_reservation_count = token_reservations_.size();
 
     return result;
 }
@@ -625,6 +642,11 @@ bool FixedPageManager::checkInvariants() const
 bool FixedPageManager::checkInvariantsLocked() const
 {
     if (tokens_per_page_ == 0 || !pool_.checkInvariants()) {
+        return false;
+    }
+
+    if (token_reservations_.size()
+            != request_token_reservations_.size()) {
         return false;
     }
 
@@ -675,6 +697,82 @@ bool FixedPageManager::checkInvariantsLocked() const
         }
     }
 
+    std::vector<std::uint8_t> expected_targets(runtime_.size(), 0);
+    for (auto const& [reservation_id, transaction] : token_reservations_) {
+        auto const request_iterator = requests_.find(transaction.request_id);
+        auto const request_reservation = request_token_reservations_.find(
+            transaction.request_id
+        );
+        if (reservation_id == kInvalidKvTokenReservationId
+            || transaction.reservation_id != reservation_id
+            || request_iterator == requests_.end()
+            || request_reservation == request_token_reservations_.end()
+            || request_reservation->second != reservation_id
+            || !transaction.candidate.checkInvariants(tokens_per_page_)
+            || transaction.candidate.tokenCount()
+                != request_iterator->second.table.tokenCount() + 1
+            || transaction.candidate.version()
+                != request_iterator->second.table.version() + 1) {
+            return false;
+        }
+        std::uint32_t const mode_count =
+            static_cast<std::uint32_t>(
+                transaction.staged_target.isStructurallyValid())
+            + static_cast<std::uint32_t>(
+                transaction.existing_mutable.isStructurallyValid());
+        if (mode_count != 1) {
+            return false;
+        }
+        if (transaction.staged_target.isStructurallyValid()) {
+            RuntimeSlot const* target = runtimeSlotLocked(
+                transaction.staged_target
+            );
+            if (target == nullptr
+                || target->state != PageState::CopyTarget
+                || target->ref_count != 0
+                || transaction.staged_target.slot >= expected_targets.size()
+                || expected_targets[transaction.staged_target.slot] != 0) {
+                return false;
+            }
+            std::uint16_t const expected_tokens =
+                transaction.replaced_sealed_tail.isStructurallyValid()
+                ? static_cast<std::uint16_t>(
+                    transaction.candidate.entries().back().valid_tokens - 1)
+                : 0;
+            if (target->valid_tokens != expected_tokens) {
+                return false;
+            }
+            expected_targets[transaction.staged_target.slot] = 1;
+        }
+        if (transaction.existing_mutable.isStructurallyValid()) {
+            RuntimeSlot const* existing = runtimeSlotLocked(
+                transaction.existing_mutable
+            );
+            if (existing == nullptr
+                || existing->state != PageState::Mutable
+                || existing->ref_count != 1
+                || existing->mutable_owner != transaction.request_id
+                || request_iterator->second.table.entries().empty()
+                || request_iterator->second.table.entries().back().handle
+                    != transaction.existing_mutable) {
+                return false;
+            }
+        }
+        if (transaction.replaced_sealed_tail.isStructurallyValid()) {
+            RuntimeSlot const* replaced = runtimeSlotLocked(
+                transaction.replaced_sealed_tail
+            );
+            if (replaced == nullptr
+                || replaced->state != PageState::Sealed
+                || replaced->ref_count == 0
+                || request_iterator->second.table.entries().empty()
+                || request_iterator->second.table.entries().back().handle
+                    != transaction.replaced_sealed_tail) {
+                return false;
+            }
+        }
+    }
+
     std::size_t allocated_slots = 0;
 
     for (std::size_t slot_index = 0;
@@ -703,13 +801,21 @@ bool FixedPageManager::checkInvariantsLocked() const
                 return false;
             }
             break;
+        case PageState::CopyTarget:
+            if (runtime.ref_count != 0
+                || runtime.mutable_owner != kInvalidRequestId
+                || expected_targets[slot_index] == 0
+                || runtime.valid_tokens >= tokens_per_page_) {
+                return false;
+            }
+            break;
         default:
-            // CopyTarget 只允许在事务间隙短暂存在；快照期不应出现。
             return false;
         }
 
         if (runtime.valid_tokens > tokens_per_page_
-            || runtime.valid_tokens == 0) {
+            || (runtime.valid_tokens == 0
+                && runtime.state != PageState::CopyTarget)) {
             return false;
         }
 

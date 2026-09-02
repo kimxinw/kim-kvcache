@@ -99,6 +99,11 @@ PromotionPrepareResult KvCacheManager::preparePromotion(
         return result;
     }
 
+    if (hasTokenReservationLocked(request_id)) {
+        result.error = KvCacheError::RequestConflict;
+        return result;
+    }
+
     BlockTable const& table = request_iterator->second.table;
 
     if (table.version_ == std::numeric_limits<std::uint64_t>::max()) {

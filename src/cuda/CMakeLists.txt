@@ -2,6 +2,8 @@ add_library(
     kim_kv_cuda
     STATIC
         cuda_kv_cache.cpp
+        cuda_engine_transaction.cpp
+        cuda_engine_kv_backend.cpp
         cuda_kv_append.cpp
         cuda_kv_attention.cpp
         cuda_kv_gather.cpp

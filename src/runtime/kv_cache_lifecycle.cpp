@@ -23,6 +23,10 @@ KvCacheError KvCacheManager::sealTail(RequestId request_id)
         return KvCacheError::RequestNotFound;
     }
 
+    if (hasTokenReservationLocked(request_id)) {
+        return KvCacheError::RequestConflict;
+    }
+
     BlockTable& table = request_iterator->second.table;
 
     if (table.entries_.empty()) {
@@ -70,6 +74,10 @@ KvCacheError KvCacheManager::forkRequest(
 
     if (source_iterator == requests_.end()) {
         return KvCacheError::RequestNotFound;
+    }
+
+    if (hasTokenReservationLocked(source_request_id)) {
+        return KvCacheError::RequestConflict;
     }
 
     if (requests_.find(child_request_id) != requests_.end()) {
@@ -146,6 +154,10 @@ KvCacheError KvCacheManager::releaseRequest(RequestId request_id)
 
     if (request_iterator == requests_.end()) {
         return KvCacheError::RequestNotFound;
+    }
+
+    if (hasTokenReservationLocked(request_id)) {
+        return KvCacheError::RequestConflict;
     }
 
     KvCacheError const rollback_error =

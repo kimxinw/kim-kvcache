@@ -25,6 +25,10 @@ KvCacheError KvCacheManager::append(
         return KvCacheError::RequestNotFound;
     }
 
+    if (hasTokenReservationLocked(request_id)) {
+        return KvCacheError::RequestConflict;
+    }
+
     RequestState& request = request_iterator->second;
     std::uint32_t const old_token_count = request.table.tokenCount();
 

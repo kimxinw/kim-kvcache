@@ -54,8 +54,10 @@ namespace kimkvcache {
         InvalidArgument,
         RequestNotFound,
         RequestAlreadyExists,
+        RequestConflict,
         ResourceExhausted,
         InvalidState,
+        TokenReservationNotFound,
         PromotionNotEligible,
         PromotionNotFound,
         PromotionConflict,
@@ -74,10 +76,14 @@ namespace kimkvcache {
             return "request_not_found";
         case KvCacheError::RequestAlreadyExists:
             return "request_already_exists";
+        case KvCacheError::RequestConflict:
+            return "request_conflict";
         case KvCacheError::ResourceExhausted:
             return "resource_exhausted";
         case KvCacheError::InvalidState:
             return "invalid_state";
+        case KvCacheError::TokenReservationNotFound:
+            return "token_reservation_not_found";
         case KvCacheError::PromotionNotEligible:
             return "promotion_not_eligible";
         case KvCacheError::PromotionNotFound:

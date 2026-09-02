@@ -5,6 +5,7 @@
 #include "kim-kv/core/page_state.h"
 // 复用全项目统一的 RequestId / kInvalidRequestId 定义。
 #include "kim-kv/runtime/promotion.h"
+#include "kim-kv/runtime/token_reservation.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,7 @@ struct FixedPageManagerSnapshot final {
     std::uint64_t request_count{0};
     std::uint64_t successful_allocations{0};
     std::uint64_t peak_allocated_pages{0};
+    std::uint64_t token_reservation_count{0};
     PagePoolSnapshot pool{};
 };
 
@@ -55,6 +57,19 @@ public:
         std::uint32_t token_count
     );
 
+    [[nodiscard]] TokenReservationResult reserveToken(
+        RequestId request_id,
+        std::uint32_t expected_committed_tokens
+    );
+
+    [[nodiscard]] KvCacheError commitTokenReservation(
+        KvTokenReservationId reservation_id
+    );
+
+    [[nodiscard]] KvCacheError rollbackTokenReservation(
+        KvTokenReservationId reservation_id
+    );
+
     [[nodiscard]] KvCacheError sealTail(RequestId request_id);
 
     [[nodiscard]] KvCacheError forkRequest(
@@ -89,6 +104,16 @@ private:
         std::size_t entry_index{0};
     };
 
+    struct TokenReservation final {
+        KvTokenReservationId reservation_id{kInvalidKvTokenReservationId};
+        RequestId request_id{kInvalidRequestId};
+        std::uint64_t prepared_table_version{0};
+        BlockTable candidate{};
+        PageHandle staged_target{PageHandle::invalid()};
+        PageHandle existing_mutable{PageHandle::invalid()};
+        PageHandle replaced_sealed_tail{PageHandle::invalid()};
+    };
+
     [[nodiscard]] RuntimeSlot* runtimeSlotLocked(
         PageHandle handle) noexcept;
 
@@ -111,6 +136,17 @@ private:
         PageHandle handle
     );
 
+    [[nodiscard]] KvTokenReservationId
+    allocateTokenReservationIdLocked();
+
+    [[nodiscard]] KvCacheError rollbackTokenReservationLocked(
+        KvTokenReservationId reservation_id
+    );
+
+    [[nodiscard]] bool hasTokenReservationLocked(
+        RequestId request_id
+    ) const noexcept;
+
     [[nodiscard]] bool checkInvariantsLocked() const;
 
     std::uint16_t tokens_per_page_;
@@ -118,6 +154,12 @@ private:
     std::vector<RuntimeSlot> runtime_;
 
     std::unordered_map<RequestId, RequestState> requests_;
+    std::unordered_map<KvTokenReservationId, TokenReservation>
+        token_reservations_;
+    std::unordered_map<RequestId, KvTokenReservationId>
+        request_token_reservations_;
+
+    KvTokenReservationId next_token_reservation_id_{1};
 
     std::uint64_t peak_allocated_pages_{0};
 

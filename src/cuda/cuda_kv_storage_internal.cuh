@@ -60,6 +60,24 @@ struct CudaSubmission::Impl final {
     ~Impl();
 };
 
+struct CudaEngineTransaction::Impl final {
+    std::shared_ptr<CudaKvStorage::Impl> storage{};
+    BlockTable before{};
+    BlockTable reserved{};
+    ::kimkvcache::DeviceBlockDescriptor* device_descriptors{nullptr};
+    std::uint32_t descriptor_count{0};
+    std::uint32_t query_head_count{0};
+    cudaStream_t stream{nullptr};
+    cudaEvent_t completion_event{nullptr};
+    CudaStatus submission_status{};
+    CudaStatus final_status{};
+    bool finished{false};
+
+    ~Impl();
+    [[nodiscard]] CudaStatus failSubmission(cudaError_t error) noexcept;
+    [[nodiscard]] CudaStatus complete() noexcept;
+};
+
 namespace cuda_storage_detail {
 
 using cuda_detail::DeviceLayout;
