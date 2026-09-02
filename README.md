@@ -48,8 +48,8 @@ Fixed-8/16/32/64 CPU 与 CUDA 运行时，并与 Hetero-8/64 使用相同 Worklo
 
 | 验证项 | 结果 |
 |---|---|
-| CPU Release 契约测试 | `8/8 PASS` |
-| CUDA Release 契约测试 | `13/13 PASS` |
+| CPU Release 契约测试 | `9/9 PASS` |
+| CUDA Release 契约测试 | `14/14 PASS` |
 | K6 正式矩阵 | 30 份 CPU + 30 份 CUDA 报告全部成功，193 项 SHA-256 通过 |
 | 容量模型 | 相比 Fixed-64，碎片降低 `88.69%～91.63%`，12 GiB 下 Admission 提升 `6.52%～21.21%` |
 | Long Gather（Nsight Compute） | Hetero `278.590 µs`，Fixed-8 `796.740 µs`，降低 `65.03%` |
@@ -104,13 +104,17 @@ build-k5-cuda-release/benchmarks/kim_kv_cuda_benchmark \
 ## 当前范围
 
 当前版本实现
+
 - 独立 CPU/CUDA Reference Path
 - 活跃前缀共享
 - Partial-Tail COW
-- 事务式 Promotion 
+- 事务式 Promotion
 - 可复现 Benchmark
+- Engine-facing KV 接口与 move-only Token Transaction 契约
 
 ## TODO
-- 持久 Prefix Cache、缓存淘汰
-- TensorRT-LLM 集成和端到端 Serving 指标
+
+- 逐层 KV metadata 事务与直接 Paged Decode Attention
+- TinyLlama FP16 ModelRunner、Generation Loop 与 Iteration Scheduler
+- Fixed/Heterogeneous 端到端正确性和性能对照
 - Nsight Systems GPU Timeline 仍待在兼容环境补采

@@ -3,6 +3,7 @@ add_library(
     STATIC
         core/block_table.cpp
         core/page_pool.cpp
+        engine/engine_kv.cpp
         fixed/fixed_page_manager.cpp
         reference/kv_reference.cpp
         runtime/kv_cache_append.cpp

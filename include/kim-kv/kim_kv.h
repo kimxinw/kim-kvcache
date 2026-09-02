@@ -7,6 +7,7 @@
 #include "kim-kv/core/page_pool.h"
 #include "kim-kv/core/page_state.h"
 #include "kim-kv/core/page_types.h"
+#include "kim-kv/engine/engine_kv.h"
 #include "kim-kv/fixed/fixed_page_manager.h"
 #include "kim-kv/reference/kv_layout.h"
 #include "kim-kv/reference/kv_reference.h"
