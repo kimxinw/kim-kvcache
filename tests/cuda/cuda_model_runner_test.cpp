@@ -1,5 +1,6 @@
 #include "kim-kv/cuda/cuda_engine_kv_backend.h"
 #include "kim-kv/cuda/cuda_model_runner.h"
+#include "kim-kv/engine/iteration_scheduler.h"
 #include "kim-kv/model/weight_manifest.h"
 
 #include <cuda_fp16.h>
@@ -699,12 +700,112 @@ void testGenerationRuntime()
         "destroy generation stream");
 }
 
+void testIterationSchedulerRuntime()
+{
+    TestArchive archive(
+        std::filesystem::temp_directory_path()
+            / "kim_kv_iteration_scheduler_cuda_contract"
+    );
+    cudaStream_t stream = nullptr;
+    expect(cudaStreamCreate(&stream) == cudaSuccess,
+        "create scheduler stream");
+    std::size_t const attention_workspace =
+        archive.config.attention_head_count
+        * archive.config.max_position_embeddings * sizeof(float);
+    EngineKvConfig const kv_config{
+        KvLayout{
+            archive.config.layer_count,
+            archive.config.kv_head_count,
+            archive.config.head_dimension,
+        },
+        archive.config.attention_head_count,
+        attention_workspace,
+    };
+
+    for (std::uint32_t concurrency : {1U, 2U, 4U}) {
+        std::unique_ptr<EngineKvBackend> backend =
+            createHeterogeneousCudaEngineKvBackend(kv_config, 128, 8);
+        expect(backend != nullptr, "create scheduler KV backend");
+        if (backend == nullptr) {
+            continue;
+        }
+        CudaModelRunnerCreateResult created = createCudaTinyLlamaModelRunner(
+            archive.manifest_path.string(),
+            archive.data_path.string(),
+            *backend,
+            reinterpret_cast<EngineStream>(stream)
+        );
+        expect(created.ok(), std::string("create scheduler model runner: ")
+            + created.status.detail);
+        if (!created.ok()) {
+            continue;
+        }
+
+        IterationSchedulerRuntime scheduler(
+            *backend, *created.runner, {concurrency, concurrency, 1024}
+        );
+        std::unordered_map<RequestId, std::vector<std::uint32_t>> expected;
+        for (std::uint32_t index = 0; index < concurrency; ++index) {
+            RequestId const request_id = 100 + concurrency * 10 + index;
+            std::vector<std::uint32_t> input(2 + index);
+            for (std::uint32_t position = 0;
+                 position < input.size();
+                 ++position) {
+                input[position] = (position * 5 + index + 1)
+                    % archive.config.vocabulary_size;
+            }
+            std::vector<std::uint32_t> output = referenceGeneration(
+                archive, input, 3
+            );
+            std::uint32_t const eos = eosOutside(
+                output, archive.config.vocabulary_size
+            );
+            expect(eos < archive.config.vocabulary_size,
+                "scheduler reference leaves EOS sentinel");
+            expected.emplace(request_id, output);
+            expect(scheduler.submit(GenerationRequest{
+                request_id,
+                std::move(input),
+                SamplingConfig{3, eos},
+                {},
+            }).ok(), "CUDA scheduler request accepted");
+        }
+
+        std::vector<GenerationTerminal> terminals = scheduler.drain();
+        expect(terminals.size() == concurrency,
+            "CUDA c1/c2/c4 produces one terminal per request");
+        for (GenerationTerminal const& terminal : terminals) {
+            expect(terminal.ok(), std::string("CUDA scheduler succeeds: ")
+                + terminal.detail);
+            auto const found = expected.find(terminal.request_id);
+            expect(found != expected.end()
+                && terminal.output_token_ids == found->second,
+                "CUDA c1/c2/c4 matches independent FP16 reference");
+        }
+        EngineKvBackendSnapshot const kv = backend->snapshot();
+        IterationSchedulerSnapshot const state = scheduler.snapshot();
+        expect(kv.request_count == 0
+            && kv.active_transaction_count == 0
+            && kv.committed_token_count == 0,
+            "CUDA scheduler reclaims KV state");
+        expect(state.activeCount() == 0
+            && state.reserved_kv_tokens == 0,
+            "CUDA scheduler reclaims admission budgets");
+        expect(backend->checkInvariants(),
+            "CUDA scheduler preserves backend invariants");
+    }
+
+    expect(cudaStreamDestroy(stream) == cudaSuccess,
+        "destroy scheduler stream");
+}
+
 } // namespace
 
 int main()
 {
     testModelRunner();
     testGenerationRuntime();
+    testIterationSchedulerRuntime();
     if (failures == 0) {
         std::cout << "CUDA model runner contract passed\n";
     }

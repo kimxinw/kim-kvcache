@@ -64,6 +64,14 @@ add_kim_kv_contract(
 )
 
 add_kim_kv_contract(
+    iteration_scheduler_test
+    iteration_scheduler_contract
+    engine/iteration_scheduler_test.cpp
+    10
+    kim_kv
+)
+
+add_kim_kv_contract(
     weight_manifest_test
     weight_manifest_contract
     model/weight_manifest_test.cpp

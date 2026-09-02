@@ -9,6 +9,7 @@
 #include "kim-kv/core/page_types.h"
 #include "kim-kv/engine/engine_kv.h"
 #include "kim-kv/engine/generation.h"
+#include "kim-kv/engine/iteration_scheduler.h"
 #include "kim-kv/fixed/fixed_page_manager.h"
 #include "kim-kv/model/tinyllama_config.h"
 #include "kim-kv/model/weight_manifest.h"
