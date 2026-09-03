@@ -72,6 +72,10 @@ struct RequestEvidence final {
 struct RunEvidence final {
     std::uint64_t elapsed_ns{0};
     std::uint64_t output_tokens{0};
+    std::uint64_t model_forward_tokens{0};
+    std::uint64_t model_forward_batches{0};
+    std::uint64_t prefill_tokens{0};
+    std::uint64_t decode_tokens{0};
     std::uint32_t accepted{0};
     std::uint32_t rejected{0};
     std::uint32_t completed{0};
@@ -432,8 +436,9 @@ void destroyContext(SuiteContext& context) noexcept
         *context.model.runner,
         IterationSchedulerConfig{
             spec.concurrency,
-            spec.concurrency,
+            spec.concurrency * 16,
             context.capacity_tokens,
+            16,
         }
     );
     Clock::time_point const started = Clock::now();
@@ -512,6 +517,11 @@ void destroyContext(SuiteContext& context) noexcept
     std::vector<GenerationTerminal> terminals = scheduler.takeTerminals();
     Clock::time_point const finished = Clock::now();
     result.elapsed_ns = elapsedNanoseconds(started, finished);
+    IterationSchedulerSnapshot const scheduler_state = scheduler.snapshot();
+    result.model_forward_tokens = scheduler_state.model_forward_tokens;
+    result.model_forward_batches = scheduler_state.model_forward_batches;
+    result.prefill_tokens = scheduler_state.prefill_tokens;
+    result.decode_tokens = scheduler_state.decode_tokens;
     result.requests.reserve(terminals.size());
     for (GenerationTerminal const& terminal : terminals) {
         RequestEvidence evidence;
@@ -546,8 +556,8 @@ void destroyContext(SuiteContext& context) noexcept
         }
     );
     EngineKvBackendSnapshot const after = context.backend->snapshot();
-    result.resources_reclaimed = scheduler.snapshot().activeCount() == 0
-        && scheduler.snapshot().reserved_kv_tokens == 0
+    result.resources_reclaimed = scheduler_state.activeCount() == 0
+        && scheduler_state.reserved_kv_tokens == 0
         && after.request_count == 0
         && after.active_transaction_count == 0
         && after.committed_token_count == 0
@@ -779,6 +789,14 @@ void writeCase(std::ostream& output, CaseEvidence const& value)
         RunEvidence const& run = value.runs[run_index];
         output << "{\"elapsed_ns\":" << run.elapsed_ns
             << ",\"output_tokens\":" << run.output_tokens
+            << ",\"model_forward_tokens\":" << run.model_forward_tokens
+            << ",\"model_forward_batches\":" << run.model_forward_batches
+            << ",\"average_batch_size\":"
+            << (run.model_forward_batches == 0 ? 0.0
+                : static_cast<double>(run.model_forward_tokens)
+                    / static_cast<double>(run.model_forward_batches))
+            << ",\"prefill_tokens\":" << run.prefill_tokens
+            << ",\"decode_tokens\":" << run.decode_tokens
             << ",\"accepted\":" << run.accepted
             << ",\"rejected\":" << run.rejected
             << ",\"completed\":" << run.completed

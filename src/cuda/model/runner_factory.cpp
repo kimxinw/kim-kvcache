@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <new>
 #include <vector>
@@ -12,12 +13,16 @@ CudaModelRunnerCreateResult createCudaTinyLlamaModelRunner(
     std::string const& manifest_path,
     std::string const& data_path,
     EngineKvBackend& kv_backend,
-    EngineStream stream)
+    EngineStream stream,
+    CudaModelRunnerOptions options)
 {
     using namespace cuda_model_runner_detail;
 
     CudaModelRunnerCreateResult result;
-    if (manifest_path.empty() || data_path.empty() || stream == nullptr) {
+    if (manifest_path.empty() || data_path.empty() || stream == nullptr
+        || !options.valid()
+        || options.max_batch_size
+            > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
         result.status = failure(
             CudaModelRunnerError::InvalidArgument,
             0,
@@ -79,7 +84,9 @@ CudaModelRunnerCreateResult createCudaTinyLlamaModelRunner(
     }
     impl->backend = &kv_backend;
     impl->stream = reinterpret_cast<cudaStream_t>(stream);
-    if (!makeWorkspaceLayout(config, impl->workspace_layout)) {
+    impl->max_batch_size = options.max_batch_size;
+    if (!makeWorkspaceLayout(
+            config, impl->max_batch_size, impl->workspace_layout)) {
         result.status = failure(
             CudaModelRunnerError::AllocationFailed,
             0,

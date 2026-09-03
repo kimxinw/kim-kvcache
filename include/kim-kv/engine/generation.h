@@ -126,6 +126,18 @@ struct GenerationStepResult final {
     std::string detail{};
 };
 
+struct GenerationBatchItem final {
+    RequestId request_id{kInvalidRequestId};
+    std::uint32_t token_id{0};
+    std::uint32_t expected_position{0};
+};
+
+struct GenerationBatchResult final {
+    bool success{false};
+    std::vector<GenerationStepResult> steps{};
+    std::string detail{};
+};
+
 // Narrow model SPI used by the E3 single-request loop. It deliberately
 // exposes only the greedy next token; logits/debug captures remain runner
 // specific correctness facilities.
@@ -142,6 +154,17 @@ public:
         std::uint32_t token_id,
         std::uint32_t expected_position
     ) = 0;
+
+    // Executes independent sequence positions as one model batch. The default
+    // implementation preserves compatibility by forwarding each item through
+    // generationForwardToken(); CUDA runners override this with a real dense
+    // batch. A successful result always contains exactly batch.size() steps,
+    // with request-local failures represented by the corresponding step.
+    [[nodiscard]] virtual GenerationBatchResult generationForwardBatch(
+        std::vector<GenerationBatchItem> const& batch
+    );
+
+    [[nodiscard]] virtual std::uint32_t generationMaxBatchSize() const noexcept;
 
 protected:
     GenerationModelRunner() = default;

@@ -14,6 +14,8 @@
 namespace kimkvcache::cuda_model_runner_detail {
 
 struct WorkspaceLayout final {
+    std::size_t token_ids{0};
+    std::size_t positions{0};
     std::size_t hidden{0};
     std::size_t normalized{0};
     std::size_t query{0};
@@ -53,6 +55,7 @@ struct WorkspaceLayout final {
 
 [[nodiscard]] bool makeWorkspaceLayout(
     TinyLlamaConfig const& config,
+    std::uint32_t max_batch_size,
     WorkspaceLayout& layout
 ) noexcept;
 
@@ -68,6 +71,7 @@ struct CudaTinyLlamaModelRunner::Impl final {
     std::uint8_t* device_weights{nullptr};
     std::uint8_t* device_workspace{nullptr};
     cuda_model_runner_detail::WorkspaceLayout workspace_layout{};
+    std::uint32_t max_batch_size{0};
 
     ~Impl();
 
@@ -94,10 +98,27 @@ struct CudaTinyLlamaModelRunner::Impl final {
         std::string const& operation
     ) const;
 
+    [[nodiscard]] CudaModelRunnerStatus gemmBatch(
+        KvScalar const* matrix,
+        KvScalar const* input,
+        KvScalar* output,
+        std::uint32_t rows,
+        std::uint32_t columns,
+        std::uint32_t batch_size,
+        std::string const& operation
+    ) const;
+
     [[nodiscard]] CudaModelRunnerStatus logitsGemv(
         KvScalar const* matrix,
         KvScalar const* input,
         float* output
+    ) const;
+
+    [[nodiscard]] CudaModelRunnerStatus logitsGemmBatch(
+        KvScalar const* matrix,
+        KvScalar const* input,
+        float* output,
+        std::uint32_t batch_size
     ) const;
 };
 

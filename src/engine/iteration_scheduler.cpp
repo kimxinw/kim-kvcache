@@ -198,7 +198,10 @@ public:
         }
     }
 
-    void processOne(Record& record, SchedulerIterationResult& result)
+    [[nodiscard]] bool prepareOne(
+        Record& record,
+        GenerationBatchItem& item,
+        bool& prefill)
     {
         if (record.cancel_requested
             || (record.request.cancellation != nullptr
@@ -209,11 +212,11 @@ public:
                 GenerationError::None,
                 "request cancelled at iteration boundary"
             );
-            return;
+            return false;
         }
         if (stopped.load(std::memory_order_acquire)) {
             stopRecord(record);
-            return;
+            return false;
         }
 
         if (!record.request_created) {
@@ -228,7 +231,7 @@ public:
                     std::string("create request failed: ")
                         + std::string(toString(created.error))
                 );
-                return;
+                return false;
             }
             record.request_created = true;
             record.state = SchedulerRequestState::Running;
@@ -238,7 +241,7 @@ public:
             }
         }
 
-        bool const prefill = record.prompt_position
+        prefill = record.prompt_position
             < record.request.prompt_token_ids.size();
         std::uint32_t token = 0;
         std::uint32_t position = 0;
@@ -253,10 +256,17 @@ public:
             token = record.terminal.output_token_ids.back();
         }
 
-        GenerationStepResult step = runner->generationForwardToken(
-            record.request.request_id, token, position
-        );
-        ++result.model_forward_tokens;
+        item = GenerationBatchItem{
+            record.request.request_id, token, position,
+        };
+        return true;
+    }
+
+    void applyOne(
+        Record& record,
+        GenerationStepResult step,
+        bool prefill)
+    {
         if (!step.success) {
             finish(
                 record,
@@ -351,6 +361,10 @@ public:
     std::vector<GenerationTerminal> terminal_queue{};
     std::uint64_t iteration_count{0};
     std::uint64_t reserved_kv_tokens{0};
+    std::uint64_t model_forward_tokens{0};
+    std::uint64_t model_forward_batches{0};
+    std::uint64_t prefill_tokens{0};
+    std::uint64_t decode_tokens{0};
 };
 
 IterationSchedulerRuntime::IterationSchedulerRuntime(
@@ -479,25 +493,196 @@ SchedulerIterationResult IterationSchedulerRuntime::runIteration()
         return result;
     }
 
+    struct ScheduledRequest final {
+        Impl::Record* record{nullptr};
+        std::uint32_t remaining_steps{0};
+    };
+    struct PlannedStep final {
+        Impl::Record* record{nullptr};
+        GenerationBatchItem item{};
+        bool prefill{false};
+    };
+
     std::size_t const scheduled = std::min<std::size_t>(
         impl_->schedule_queue.size(), impl_->config.max_batched_tokens
     );
-    for (std::size_t index = 0; index < scheduled; ++index) {
-        RequestId const request_id = impl_->schedule_queue.front();
-        impl_->schedule_queue.pop_front();
-        auto const found = impl_->records.find(request_id);
-        if (found == impl_->records.end()
-            || found->second.state == SchedulerRequestState::Terminal) {
-            continue;
+    std::vector<ScheduledRequest> selected;
+    try {
+        selected.reserve(scheduled);
+        for (std::size_t index = 0; index < scheduled; ++index) {
+            RequestId const request_id = impl_->schedule_queue.front();
+            impl_->schedule_queue.pop_front();
+            auto const found = impl_->records.find(request_id);
+            if (found == impl_->records.end()
+                || found->second.state == SchedulerRequestState::Terminal) {
+                continue;
+            }
+            Impl::Record& record = found->second;
+            std::uint32_t const prompt_remaining =
+                static_cast<std::uint32_t>(
+                    record.request.prompt_token_ids.size()
+                ) - record.prompt_position;
+            std::uint32_t const quota = prompt_remaining == 0
+                ? 1
+                : std::min(
+                    prompt_remaining, impl_->config.prefill_chunk_size
+                );
+            selected.push_back(ScheduledRequest{&record, quota});
         }
-        impl_->processOne(found->second, result);
-        if (found->second.state != SchedulerRequestState::Terminal) {
-            impl_->schedule_queue.push_back(request_id);
+    } catch (std::bad_alloc const&) {
+        for (ScheduledRequest const& request : selected) {
+            if (request.record->state != SchedulerRequestState::Terminal) {
+                impl_->finish(
+                    *request.record,
+                    GenerationTerminalReason::Failed,
+                    GenerationError::InternalError,
+                    "scheduler batch planning allocation failed"
+                );
+            }
         }
-        if (stopped()) {
-            impl_->stopAll();
+    }
+
+    std::uint32_t remaining_budget = impl_->config.max_batched_tokens;
+    std::uint32_t const runner_batch_size =
+        impl_->runner->generationMaxBatchSize();
+    if (runner_batch_size == 0) {
+        for (ScheduledRequest const& request : selected) {
+            if (request.record->state != SchedulerRequestState::Terminal) {
+                impl_->finish(
+                    *request.record,
+                    GenerationTerminalReason::Failed,
+                    GenerationError::ModelFailed,
+                    "model runner reported a zero maximum batch size"
+                );
+            }
+        }
+    }
+    while (remaining_budget != 0 && runner_batch_size != 0) {
+        std::vector<PlannedStep> plan;
+        try {
+            plan.reserve(std::min<std::size_t>(
+                selected.size(), remaining_budget
+            ));
+            for (ScheduledRequest& request : selected) {
+                if (request.remaining_steps == 0 || remaining_budget == 0
+                    || request.record->state
+                        == SchedulerRequestState::Terminal) {
+                    continue;
+                }
+                GenerationBatchItem item;
+                bool prefill = false;
+                if (impl_->prepareOne(*request.record, item, prefill)) {
+                    plan.push_back(PlannedStep{
+                        request.record, item, prefill,
+                    });
+                    --request.remaining_steps;
+                    --remaining_budget;
+                } else {
+                    request.remaining_steps = 0;
+                }
+            }
+        } catch (std::bad_alloc const&) {
+            for (ScheduledRequest const& request : selected) {
+                if (request.record->state != SchedulerRequestState::Terminal) {
+                    impl_->finish(
+                        *request.record,
+                        GenerationTerminalReason::Failed,
+                        GenerationError::InternalError,
+                        "scheduler model batch allocation failed"
+                    );
+                }
+            }
             break;
         }
+        if (plan.empty()) {
+            break;
+        }
+
+        for (std::size_t begin = 0; begin < plan.size();
+             begin += runner_batch_size) {
+            std::size_t const end = std::min<std::size_t>(
+                plan.size(), begin + runner_batch_size
+            );
+            std::vector<GenerationBatchItem> batch;
+            try {
+                batch.reserve(end - begin);
+                for (std::size_t index = begin; index < end; ++index) {
+                    batch.push_back(plan[index].item);
+                }
+            } catch (std::bad_alloc const&) {
+                for (std::size_t index = begin; index < end; ++index) {
+                    impl_->finish(
+                        *plan[index].record,
+                        GenerationTerminalReason::Failed,
+                        GenerationError::InternalError,
+                        "scheduler model batch allocation failed"
+                    );
+                }
+                continue;
+            }
+
+            GenerationBatchResult batch_result =
+                impl_->runner->generationForwardBatch(batch);
+            ++result.model_forward_batches;
+            result.model_forward_tokens += static_cast<std::uint32_t>(
+                batch.size()
+            );
+            for (std::size_t index = begin; index < end; ++index) {
+                if (plan[index].prefill) {
+                    ++result.prefill_tokens;
+                } else {
+                    ++result.decode_tokens;
+                }
+            }
+            if (!batch_result.success
+                || batch_result.steps.size() != batch.size()) {
+                std::string detail = batch_result.detail.empty()
+                    ? "model returned an invalid batch result"
+                    : std::move(batch_result.detail);
+                for (std::size_t index = begin; index < end; ++index) {
+                    impl_->finish(
+                        *plan[index].record,
+                        GenerationTerminalReason::Failed,
+                        GenerationError::ModelFailed,
+                        detail
+                    );
+                }
+            } else {
+                for (std::size_t index = begin; index < end; ++index) {
+                    impl_->applyOne(
+                        *plan[index].record,
+                        std::move(batch_result.steps[index - begin]),
+                        plan[index].prefill
+                    );
+                }
+            }
+            if (stopped()) {
+                break;
+            }
+        }
+        if (stopped()) {
+            break;
+        }
+    }
+
+    impl_->model_forward_tokens += result.model_forward_tokens;
+    impl_->model_forward_batches += result.model_forward_batches;
+    impl_->prefill_tokens += result.prefill_tokens;
+    impl_->decode_tokens += result.decode_tokens;
+
+    for (ScheduledRequest const& request : selected) {
+        if (request.record->state != SchedulerRequestState::Terminal) {
+            if (stopped()) {
+                impl_->stopRecord(*request.record);
+            } else {
+                impl_->schedule_queue.push_back(
+                    request.record->request.request_id
+                );
+            }
+        }
+    }
+    if (stopped()) {
+        impl_->stopAll();
     }
     result.terminals_produced = static_cast<std::uint32_t>(
         impl_->terminal_queue.size() - terminals_before
@@ -540,6 +725,10 @@ IterationSchedulerSnapshot IterationSchedulerRuntime::snapshot() const
     result.iteration_count = impl_->iteration_count;
     result.accepted_count = impl_->records.size();
     result.reserved_kv_tokens = impl_->reserved_kv_tokens;
+    result.model_forward_tokens = impl_->model_forward_tokens;
+    result.model_forward_batches = impl_->model_forward_batches;
+    result.prefill_tokens = impl_->prefill_tokens;
+    result.decode_tokens = impl_->decode_tokens;
     result.stopped = stopped();
     for (auto const& entry : impl_->states) {
         switch (entry.second) {

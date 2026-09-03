@@ -75,16 +75,20 @@ enum class SchedulerAdmissionError : std::uint8_t {
 
 struct IterationSchedulerConfig final {
     std::uint32_t max_active_requests{0};
-    // Each model forward consumes one token from this per-iteration budget.
+    // Total sequence positions consumed by all model batches in one iteration.
     std::uint32_t max_batched_tokens{0};
     // Worst-case committed sequence tokens reserved at admission time.
     std::uint64_t max_kv_tokens{0};
+    // A prefill request may advance by at most this many prompt positions in
+    // one iteration. Decode requests always advance by at most one position.
+    std::uint32_t prefill_chunk_size{16};
 
     [[nodiscard]] constexpr bool valid() const noexcept
     {
         return max_active_requests != 0
             && max_batched_tokens != 0
-            && max_kv_tokens != 0;
+            && max_kv_tokens != 0
+            && prefill_chunk_size != 0;
     }
 };
 
@@ -102,6 +106,9 @@ struct SchedulerAdmissionResult final {
 struct SchedulerIterationResult final {
     std::uint64_t iteration{0};
     std::uint32_t model_forward_tokens{0};
+    std::uint32_t model_forward_batches{0};
+    std::uint32_t prefill_tokens{0};
+    std::uint32_t decode_tokens{0};
     std::uint32_t terminals_produced{0};
 };
 
@@ -114,6 +121,10 @@ struct IterationSchedulerSnapshot final {
     std::uint64_t cancelling_count{0};
     std::uint64_t terminal_count{0};
     std::uint64_t reserved_kv_tokens{0};
+    std::uint64_t model_forward_tokens{0};
+    std::uint64_t model_forward_batches{0};
+    std::uint64_t prefill_tokens{0};
+    std::uint64_t decode_tokens{0};
     bool stopped{false};
 
     [[nodiscard]] constexpr std::uint64_t activeCount() const noexcept

@@ -27,6 +27,24 @@ __global__ void embeddingKernel(
     }
 }
 
+__global__ void embeddingBatchKernel(
+    __half const* weights,
+    std::uint32_t const* token_ids,
+    __half* output,
+    std::uint32_t hidden_size,
+    std::uint32_t batch_size)
+{
+    std::uint32_t const index = blockIdx.x * blockDim.x + threadIdx.x;
+    std::uint32_t const element_count = hidden_size * batch_size;
+    if (index < element_count) {
+        std::uint32_t const batch = index / hidden_size;
+        std::uint32_t const hidden = index % hidden_size;
+        output[index] = weights[
+            static_cast<std::size_t>(token_ids[batch]) * hidden_size + hidden
+        ];
+    }
+}
+
 __global__ void rmsNormKernel(
     __half const* input,
     __half const* weights,
@@ -65,6 +83,46 @@ __global__ void rmsNormKernel(
     }
 }
 
+__global__ void rmsNormBatchKernel(
+    __half const* input,
+    __half const* weights,
+    __half* output,
+    std::uint32_t hidden_size,
+    float epsilon)
+{
+    __shared__ float reduction[kThreads];
+    std::size_t const base =
+        static_cast<std::size_t>(blockIdx.x) * hidden_size;
+    float sum = 0.0F;
+    for (std::uint32_t index = threadIdx.x;
+         index < hidden_size;
+         index += blockDim.x) {
+        float const value = __half2float(input[base + index]);
+        sum += value * value;
+    }
+    reduction[threadIdx.x] = sum;
+    __syncthreads();
+    for (std::uint32_t stride = blockDim.x / 2;
+         stride != 0;
+         stride /= 2) {
+        if (threadIdx.x < stride) {
+            reduction[threadIdx.x] += reduction[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    float const scale = rsqrtf(
+        reduction[0] / static_cast<float>(hidden_size) + epsilon
+    );
+    for (std::uint32_t index = threadIdx.x;
+         index < hidden_size;
+         index += blockDim.x) {
+        output[base + index] = __float2half(
+            __half2float(input[base + index]) * scale
+            * __half2float(weights[index])
+        );
+    }
+}
+
 __global__ void ropeKernel(
     __half* values,
     std::uint32_t head_count,
@@ -89,6 +147,42 @@ __global__ void ropeKernel(
             / static_cast<float>(head_dimension)
     );
     float const angle = static_cast<float>(position) * inverse_frequency;
+    float const cosine = cosf(angle);
+    float const sine = sinf(angle);
+    float const first_value = __half2float(values[first]);
+    float const second_value = __half2float(values[second]);
+    values[first] = __float2half(first_value * cosine - second_value * sine);
+    values[second] = __float2half(second_value * cosine + first_value * sine);
+}
+
+__global__ void ropeBatchKernel(
+    __half* values,
+    std::uint32_t head_count,
+    std::uint32_t head_dimension,
+    std::uint32_t const* positions,
+    float theta)
+{
+    std::uint32_t const batch = blockIdx.y;
+    std::uint32_t const half_dimension = head_dimension / 2;
+    std::uint32_t const index = blockIdx.x * blockDim.x + threadIdx.x;
+    std::uint32_t const element_count = head_count * half_dimension;
+    if (index >= element_count) {
+        return;
+    }
+    std::uint32_t const head = index / half_dimension;
+    std::uint32_t const dimension = index % half_dimension;
+    std::size_t const batch_base = static_cast<std::size_t>(batch)
+        * head_count * head_dimension;
+    std::size_t const first = batch_base
+        + static_cast<std::size_t>(head) * head_dimension + dimension;
+    std::size_t const second = first + half_dimension;
+    float const inverse_frequency = powf(
+        theta,
+        -2.0F * static_cast<float>(dimension)
+            / static_cast<float>(head_dimension)
+    );
+    float const angle = static_cast<float>(positions[batch])
+        * inverse_frequency;
     float const cosine = cosf(angle);
     float const sine = sinf(angle);
     float const first_value = __half2float(values[first]);
@@ -166,6 +260,38 @@ __global__ void argmaxKernel(
     }
 }
 
+__global__ void argmaxBatchKernel(
+    float const* logits,
+    std::uint32_t vocabulary_size,
+    std::uint32_t* output_tokens)
+{
+    __shared__ ArgmaxValue reduction[kThreads];
+    std::uint32_t const batch = blockIdx.x;
+    float const* batch_logits = logits
+        + static_cast<std::size_t>(batch) * vocabulary_size;
+    ArgmaxValue local{-FLT_MAX, 0};
+    for (std::uint32_t index = threadIdx.x;
+         index < vocabulary_size;
+         index += blockDim.x) {
+        local = better(local, ArgmaxValue{batch_logits[index], index});
+    }
+    reduction[threadIdx.x] = local;
+    __syncthreads();
+    for (std::uint32_t stride = blockDim.x / 2;
+         stride != 0;
+         stride /= 2) {
+        if (threadIdx.x < stride) {
+            reduction[threadIdx.x] = better(
+                reduction[threadIdx.x], reduction[threadIdx.x + stride]
+            );
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        output_tokens[batch] = reduction[0].index;
+    }
+}
+
 [[nodiscard]] constexpr dim3 blocks(std::uint32_t elements) noexcept
 {
     return dim3{(elements + kThreads - 1) / kThreads};
@@ -188,6 +314,24 @@ void launchEmbedding(
     );
 }
 
+void launchEmbeddingBatch(
+    KvScalar const* weights,
+    std::uint32_t const* token_ids,
+    KvScalar* output,
+    std::uint32_t hidden_size,
+    std::uint32_t batch_size,
+    cudaStream_t stream) noexcept
+{
+    embeddingBatchKernel<<<
+        blocks(hidden_size * batch_size), kThreads, 0, stream>>>(
+        reinterpret_cast<__half const*>(weights),
+        token_ids,
+        reinterpret_cast<__half*>(output),
+        hidden_size,
+        batch_size
+    );
+}
+
 void launchRmsNorm(
     KvScalar const* input,
     KvScalar const* weights,
@@ -197,6 +341,24 @@ void launchRmsNorm(
     cudaStream_t stream) noexcept
 {
     rmsNormKernel<<<1, kThreads, 0, stream>>>(
+        reinterpret_cast<__half const*>(input),
+        reinterpret_cast<__half const*>(weights),
+        reinterpret_cast<__half*>(output),
+        hidden_size,
+        epsilon
+    );
+}
+
+void launchRmsNormBatch(
+    KvScalar const* input,
+    KvScalar const* weights,
+    KvScalar* output,
+    std::uint32_t hidden_size,
+    std::uint32_t batch_size,
+    float epsilon,
+    cudaStream_t stream) noexcept
+{
+    rmsNormBatchKernel<<<batch_size, kThreads, 0, stream>>>(
         reinterpret_cast<__half const*>(input),
         reinterpret_cast<__half const*>(weights),
         reinterpret_cast<__half*>(output),
@@ -227,6 +389,31 @@ void launchRope(
     );
 }
 
+void launchRopeBatch(
+    KvScalar* query,
+    KvScalar* key,
+    std::uint32_t query_heads,
+    std::uint32_t kv_heads,
+    std::uint32_t head_dimension,
+    std::uint32_t const* positions,
+    std::uint32_t batch_size,
+    float theta,
+    cudaStream_t stream) noexcept
+{
+    std::uint32_t const query_elements = query_heads * head_dimension / 2;
+    std::uint32_t const key_elements = kv_heads * head_dimension / 2;
+    ropeBatchKernel<<<
+        dim3{blocks(query_elements).x, batch_size}, kThreads, 0, stream>>>(
+        reinterpret_cast<__half*>(query), query_heads, head_dimension,
+        positions, theta
+    );
+    ropeBatchKernel<<<
+        dim3{blocks(key_elements).x, batch_size}, kThreads, 0, stream>>>(
+        reinterpret_cast<__half*>(key), kv_heads, head_dimension,
+        positions, theta
+    );
+}
+
 void launchResidualAdd(
     KvScalar const* residual,
     KvScalar const* update,
@@ -239,6 +426,19 @@ void launchResidualAdd(
         reinterpret_cast<__half const*>(update),
         reinterpret_cast<__half*>(output),
         element_count
+    );
+}
+
+void launchResidualAddBatch(
+    KvScalar const* residual,
+    KvScalar const* update,
+    KvScalar* output,
+    std::uint32_t elements_per_item,
+    std::uint32_t batch_size,
+    cudaStream_t stream) noexcept
+{
+    launchResidualAdd(
+        residual, update, output, elements_per_item * batch_size, stream
     );
 }
 
@@ -257,6 +457,19 @@ void launchSwiGlu(
     );
 }
 
+void launchSwiGluBatch(
+    KvScalar const* gate,
+    KvScalar const* up,
+    KvScalar* output,
+    std::uint32_t elements_per_item,
+    std::uint32_t batch_size,
+    cudaStream_t stream) noexcept
+{
+    launchSwiGlu(
+        gate, up, output, elements_per_item * batch_size, stream
+    );
+}
+
 void launchArgmax(
     float const* logits,
     std::uint32_t vocabulary_size,
@@ -265,6 +478,18 @@ void launchArgmax(
 {
     argmaxKernel<<<1, kThreads, 0, stream>>>(
         logits, vocabulary_size, output_token
+    );
+}
+
+void launchArgmaxBatch(
+    float const* logits,
+    std::uint32_t vocabulary_size,
+    std::uint32_t* output_tokens,
+    std::uint32_t batch_size,
+    cudaStream_t stream) noexcept
+{
+    argmaxBatchKernel<<<batch_size, kThreads, 0, stream>>>(
+        logits, vocabulary_size, output_tokens
     );
 }
 

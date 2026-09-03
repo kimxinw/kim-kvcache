@@ -42,7 +42,9 @@ LM Head 与 Greedy Argmax。权重 Manifest 记录 Shape、Offset 和逐 Tensor 
 
 `IterationSchedulerRuntime` 使用 FIFO 轮转在 Token 边界动态加入和退出请求，支持
 `c1/c2/c4`、请求取消、跨请求失败隔离、Stop 排空，以及活动请求、每轮 Token 和 KV
-Token 三类预算。第一版在共享 ModelRunner/Stream 上逐请求推进，不宣称融合 Batch Kernel。
+Token 三类预算。Scheduler 将同一 Wave 的独立序列位置组成动态 Batch，Dense Linear 使用
+`N=batch_size` 的 cuBLAS GEMM；Prefill 按可配置 Chunk 推进，并可与 Decode 请求混合组批。
+每个请求仍保留独立 KV Transaction，单个 Lane 失败不会提交半写 KV。
 
 ## 验证结果
 
@@ -111,10 +113,13 @@ scripts/run_e5_end_to_end.sh
 
 ## 当前范围
 
-当前实现为单 GPU、单模型、同步 Iteration Scheduler；每轮在共享 Stream 上串行推进
-最多 `max_batched_tokens` 个请求。尚未实现融合/并行 Batch Model Forward。
+当前实现为单 GPU、单模型、同步 Iteration Scheduler。Dense 算子已支持动态 Batch，
+`max_batched_tokens` 控制每轮全部 Batch Lane 的 Token 总预算，`prefill_chunk_size` 控制
+单请求每轮可推进的 Prompt 长度。Paged Attention 目前仍按 Lane 向共享 Stream 提交，
+Chunk 内同一请求的 Token 以因果顺序分 Wave 执行，尚未实现多 Token 融合 Prefill
+Attention 或 Batched Paged Attention Kernel。
 
 ## TODO
 - 在 Engine Generation 路径接入自动 Promotion，使 Extent Pool 参与端到端执行；
-- 实现融合/并行 Batched Model Forward；
+- 融合 Batched Paged Attention 与多 Token Prefill Attention；
 - 接入 `kim-llm-serving` MiniEngine Backend。

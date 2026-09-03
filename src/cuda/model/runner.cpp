@@ -3,6 +3,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -42,6 +43,11 @@ std::uint64_t CudaTinyLlamaModelRunner::deviceWeightBytes() const noexcept
 std::uint64_t CudaTinyLlamaModelRunner::deviceWorkspaceBytes() const noexcept
 {
     return impl_ != nullptr ? impl_->workspace_layout.bytes : 0;
+}
+
+std::uint32_t CudaTinyLlamaModelRunner::maxBatchSize() const noexcept
+{
+    return impl_ != nullptr ? impl_->max_batch_size : 0;
 }
 
 ModelTokenResult CudaTinyLlamaModelRunner::forwardToken(
@@ -401,21 +407,416 @@ TinyLlamaConfig CudaTinyLlamaModelRunner::generationConfig() const noexcept
     return config();
 }
 
+GenerationBatchResult CudaTinyLlamaModelRunner::generationForwardBatch(
+    std::vector<GenerationBatchItem> const& batch)
+{
+    GenerationBatchResult result;
+    if (impl_ == nullptr || impl_->backend == nullptr) {
+        result.detail = "runner is empty";
+        return result;
+    }
+    if (batch.empty() || batch.size() > impl_->max_batch_size) {
+        result.detail = "generation batch is empty or exceeds max batch size";
+        return result;
+    }
+
+    TinyLlamaConfig const& config = impl_->manifest.config;
+    std::vector<std::size_t> active_indices;
+    std::vector<std::uint32_t> token_ids;
+    std::vector<std::uint32_t> positions;
+    std::vector<TokenTransaction> transactions;
+    try {
+        result.steps.resize(batch.size());
+        active_indices.reserve(batch.size());
+        token_ids.reserve(batch.size());
+        positions.reserve(batch.size());
+        transactions.reserve(batch.size());
+    } catch (std::bad_alloc const&) {
+        result.steps.clear();
+        result.detail = "batch host workspace allocation failed";
+        return result;
+    }
+
+    for (std::size_t index = 0; index < batch.size(); ++index) {
+        GenerationBatchItem const& item = batch[index];
+        if (item.request_id == kInvalidRequestId
+            || item.token_id >= config.vocabulary_size
+            || item.expected_position >= config.max_position_embeddings) {
+            result.steps[index] = {
+                false, 0, "request, token, or position is out of range",
+            };
+            continue;
+        }
+        TokenReserveResult reserved = impl_->backend->reserveToken(
+            ReserveTokenRequest{
+                item.request_id,
+                item.expected_position,
+                reinterpret_cast<EngineStream>(impl_->stream),
+            }
+        );
+        if (!reserved.ok()) {
+            CudaModelRunnerStatus const status = kvFailure(
+                reserved.status, "reserve token"
+            );
+            result.steps[index] = {false, 0, status.detail};
+            continue;
+        }
+        try {
+            active_indices.push_back(index);
+            token_ids.push_back(item.token_id);
+            positions.push_back(item.expected_position);
+            transactions.push_back(std::move(reserved.transaction));
+        } catch (std::bad_alloc const&) {
+            result.steps[index] = {
+                false, 0, "batch transaction allocation failed",
+            };
+        }
+    }
+    result.success = true;
+    if (active_indices.empty()) {
+        return result;
+    }
+
+    std::uint32_t const batch_size = static_cast<std::uint32_t>(
+        active_indices.size()
+    );
+    std::vector<bool> active(batch_size, true);
+    std::vector<std::uint32_t> greedy_tokens;
+    try {
+        greedy_tokens.resize(batch_size);
+    } catch (std::bad_alloc const&) {
+        for (std::size_t index : active_indices) {
+            result.steps[index] = {
+                false, 0, "batch output allocation failed",
+            };
+        }
+        return result;
+    }
+
+    auto failActive = [&](std::string const& detail) {
+        for (std::uint32_t lane = 0; lane < batch_size; ++lane) {
+            if (active[lane]) {
+                result.steps[active_indices[lane]] = {false, 0, detail};
+                active[lane] = false;
+            }
+        }
+    };
+    auto checkLaunch = [&](std::string const& operation) {
+        CudaModelRunnerStatus const status = impl_->checkLaunch(operation);
+        if (!status.ok()) {
+            failActive(status.detail);
+            return false;
+        }
+        return true;
+    };
+    auto checkDense = [&](CudaModelRunnerStatus const& status) {
+        if (!status.ok()) {
+            failActive(status.detail);
+            return false;
+        }
+        return true;
+    };
+
+    WorkspaceLayout const& offsets = impl_->workspace_layout;
+    std::uint32_t* const device_token_ids =
+        impl_->workspace<std::uint32_t>(offsets.token_ids);
+    std::uint32_t* const device_positions =
+        impl_->workspace<std::uint32_t>(offsets.positions);
+    KvScalar* const hidden = impl_->workspace<KvScalar>(offsets.hidden);
+    KvScalar* const normalized =
+        impl_->workspace<KvScalar>(offsets.normalized);
+    KvScalar* const query = impl_->workspace<KvScalar>(offsets.query);
+    KvScalar* const key = impl_->workspace<KvScalar>(offsets.key);
+    KvScalar* const value = impl_->workspace<KvScalar>(offsets.value);
+    KvScalar* const attention =
+        impl_->workspace<KvScalar>(offsets.attention);
+    KvScalar* const projection =
+        impl_->workspace<KvScalar>(offsets.projection);
+    KvScalar* const gate = impl_->workspace<KvScalar>(offsets.gate);
+    KvScalar* const up = impl_->workspace<KvScalar>(offsets.up);
+    KvScalar* const activated =
+        impl_->workspace<KvScalar>(offsets.activated);
+    float* const logits = impl_->workspace<float>(offsets.logits);
+    std::uint32_t* const device_greedy_tokens =
+        impl_->workspace<std::uint32_t>(offsets.greedy_token);
+    float* const attention_scores =
+        impl_->workspace<float>(offsets.attention_scores);
+
+    std::size_t const index_bytes = static_cast<std::size_t>(batch_size)
+        * sizeof(std::uint32_t);
+    cudaError_t copied = cudaMemcpyAsync(
+        device_token_ids,
+        token_ids.data(),
+        index_bytes,
+        cudaMemcpyHostToDevice,
+        impl_->stream
+    );
+    if (copied == cudaSuccess) {
+        copied = cudaMemcpyAsync(
+            device_positions,
+            positions.data(),
+            index_bytes,
+            cudaMemcpyHostToDevice,
+            impl_->stream
+        );
+    }
+    if (copied != cudaSuccess) {
+        failActive(cudaFailure(copied, "copy batch inputs").detail);
+        return result;
+    }
+
+    cuda_model_detail::launchEmbeddingBatch(
+        impl_->weight("model.embed_tokens.weight"),
+        device_token_ids,
+        hidden,
+        config.hidden_size,
+        batch_size,
+        impl_->stream
+    );
+    if (!checkLaunch("batched embedding lookup")) {
+        return result;
+    }
+
+    std::uint32_t const kv_size =
+        config.kv_head_count * config.head_dimension;
+    float const attention_scale =
+        1.0F / std::sqrt(static_cast<float>(config.head_dimension));
+    std::size_t const score_bytes_per_lane =
+        static_cast<std::size_t>(config.attention_head_count)
+        * config.max_position_embeddings * sizeof(float);
+    for (std::uint32_t layer = 0; layer < config.layer_count; ++layer) {
+        std::string const prefix = "model.layers."
+            + std::to_string(layer) + ".";
+        cuda_model_detail::launchRmsNormBatch(
+            hidden,
+            impl_->weight(prefix + "input_layernorm.weight"),
+            normalized,
+            config.hidden_size,
+            batch_size,
+            config.rms_norm_epsilon,
+            impl_->stream
+        );
+        if (!checkLaunch("batched input rmsnorm")
+            || !checkDense(impl_->gemmBatch(
+                impl_->weight(prefix + "self_attn.q_proj.weight"),
+                normalized, query, config.hidden_size, config.hidden_size,
+                batch_size, "batched q projection"
+            ))
+            || !checkDense(impl_->gemmBatch(
+                impl_->weight(prefix + "self_attn.k_proj.weight"),
+                normalized, key, kv_size, config.hidden_size,
+                batch_size, "batched k projection"
+            ))
+            || !checkDense(impl_->gemmBatch(
+                impl_->weight(prefix + "self_attn.v_proj.weight"),
+                normalized, value, kv_size, config.hidden_size,
+                batch_size, "batched v projection"
+            ))) {
+            return result;
+        }
+        cuda_model_detail::launchRopeBatch(
+            query,
+            key,
+            config.attention_head_count,
+            config.kv_head_count,
+            config.head_dimension,
+            device_positions,
+            batch_size,
+            config.rope_theta,
+            impl_->stream
+        );
+        if (!checkLaunch("batched rope")) {
+            return result;
+        }
+
+        for (std::uint32_t lane = 0; lane < batch_size; ++lane) {
+            if (!active[lane]) {
+                continue;
+            }
+            EngineKvStatus const write = transactions[lane].writeLayer(
+                LayerKvWrite{
+                    layer,
+                    key + static_cast<std::size_t>(lane) * kv_size,
+                    value + static_cast<std::size_t>(lane) * kv_size,
+                }
+            );
+            if (!write.ok()) {
+                result.steps[active_indices[lane]] = {
+                    false, 0, kvFailure(write, "write batched layer kv").detail,
+                };
+                active[lane] = false;
+                continue;
+            }
+            EngineKvStatus const attended = transactions[lane].attendLayer(
+                PagedDecodeRequest{
+                    layer,
+                    query + static_cast<std::size_t>(lane)
+                        * config.hidden_size,
+                    attention + static_cast<std::size_t>(lane)
+                        * config.hidden_size,
+                    attention_scores + static_cast<std::size_t>(lane)
+                        * config.attention_head_count
+                        * config.max_position_embeddings,
+                    score_bytes_per_lane,
+                    attention_scale,
+                }
+            );
+            if (!attended.ok()) {
+                result.steps[active_indices[lane]] = {
+                    false, 0,
+                    kvFailure(attended, "batched paged decode attention").detail,
+                };
+                active[lane] = false;
+            }
+        }
+        if (std::none_of(active.begin(), active.end(), [](bool value) {
+                return value;
+            })) {
+            return result;
+        }
+
+        if (!checkDense(impl_->gemmBatch(
+                impl_->weight(prefix + "self_attn.o_proj.weight"),
+                attention, projection, config.hidden_size, config.hidden_size,
+                batch_size, "batched attention output projection"
+            ))) {
+            return result;
+        }
+        cuda_model_detail::launchResidualAddBatch(
+            hidden, projection, hidden, config.hidden_size,
+            batch_size, impl_->stream
+        );
+        if (!checkLaunch("batched attention residual")) {
+            return result;
+        }
+        cuda_model_detail::launchRmsNormBatch(
+            hidden,
+            impl_->weight(prefix + "post_attention_layernorm.weight"),
+            normalized,
+            config.hidden_size,
+            batch_size,
+            config.rms_norm_epsilon,
+            impl_->stream
+        );
+        if (!checkLaunch("batched post attention rmsnorm")
+            || !checkDense(impl_->gemmBatch(
+                impl_->weight(prefix + "mlp.gate_proj.weight"),
+                normalized, gate, config.intermediate_size,
+                config.hidden_size, batch_size, "batched mlp gate projection"
+            ))
+            || !checkDense(impl_->gemmBatch(
+                impl_->weight(prefix + "mlp.up_proj.weight"),
+                normalized, up, config.intermediate_size,
+                config.hidden_size, batch_size, "batched mlp up projection"
+            ))) {
+            return result;
+        }
+        cuda_model_detail::launchSwiGluBatch(
+            gate, up, activated, config.intermediate_size,
+            batch_size, impl_->stream
+        );
+        if (!checkLaunch("batched swiglu")
+            || !checkDense(impl_->gemmBatch(
+                impl_->weight(prefix + "mlp.down_proj.weight"),
+                activated, projection, config.hidden_size,
+                config.intermediate_size, batch_size,
+                "batched mlp down projection"
+            ))) {
+            return result;
+        }
+        cuda_model_detail::launchResidualAddBatch(
+            hidden, projection, hidden, config.hidden_size,
+            batch_size, impl_->stream
+        );
+        if (!checkLaunch("batched mlp residual")) {
+            return result;
+        }
+    }
+
+    cuda_model_detail::launchRmsNormBatch(
+        hidden,
+        impl_->weight("model.norm.weight"),
+        normalized,
+        config.hidden_size,
+        batch_size,
+        config.rms_norm_epsilon,
+        impl_->stream
+    );
+    if (!checkLaunch("batched final rmsnorm")
+        || !checkDense(impl_->logitsGemmBatch(
+            impl_->weight("lm_head.weight"), normalized, logits, batch_size
+        ))) {
+        return result;
+    }
+    cuda_model_detail::launchArgmaxBatch(
+        logits,
+        config.vocabulary_size,
+        device_greedy_tokens,
+        batch_size,
+        impl_->stream
+    );
+    if (!checkLaunch("batched greedy argmax")) {
+        return result;
+    }
+    copied = cudaMemcpyAsync(
+        greedy_tokens.data(),
+        device_greedy_tokens,
+        index_bytes,
+        cudaMemcpyDeviceToHost,
+        impl_->stream
+    );
+    if (copied != cudaSuccess) {
+        failActive(cudaFailure(copied, "copy batched model output").detail);
+        return result;
+    }
+
+    for (std::uint32_t lane = 0; lane < batch_size; ++lane) {
+        if (!active[lane]) {
+            continue;
+        }
+        EngineKvStatus const committed = transactions[lane].commit();
+        if (!committed.ok()) {
+            result.steps[active_indices[lane]] = {
+                false, 0,
+                kvFailure(committed, "commit batched model token").detail,
+            };
+            active[lane] = false;
+            continue;
+        }
+        result.steps[active_indices[lane]] = {
+            true, greedy_tokens[lane], {},
+        };
+    }
+    return result;
+}
+
+std::uint32_t CudaTinyLlamaModelRunner::generationMaxBatchSize() const noexcept
+{
+    return maxBatchSize();
+}
+
 GenerationStepResult CudaTinyLlamaModelRunner::generationForwardToken(
     RequestId request_id,
     std::uint32_t token_id,
     std::uint32_t expected_position)
 {
-    ModelTokenResult result = forwardToken(
-        request_id,
-        token_id,
-        expected_position,
-        nullptr,
-        ModelRunnerOutputOptions{false}
-    );
-    return GenerationStepResult{
-        result.ok(), result.greedy_token_id, std::move(result.status.detail),
-    };
+    try {
+        GenerationBatchResult result = generationForwardBatch({
+            GenerationBatchItem{request_id, token_id, expected_position},
+        });
+        if (!result.success || result.steps.size() != 1) {
+            return {
+                false,
+                0,
+                result.detail.empty()
+                    ? "single-token batch returned an invalid result"
+                    : std::move(result.detail),
+            };
+        }
+        return std::move(result.steps.front());
+    } catch (std::bad_alloc const&) {
+        return {false, 0, "single-token batch allocation failed"};
+    }
 }
 
 

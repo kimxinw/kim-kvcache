@@ -90,6 +90,7 @@ public:
     };
     std::unordered_set<RequestId> fail_requests{};
     std::unordered_map<RequestId, std::uint64_t> calls{};
+    std::vector<std::size_t> batch_sizes{};
     IterationSchedulerRuntime* stop_scheduler{nullptr};
     RequestId stop_request{kInvalidRequestId};
 
@@ -117,6 +118,13 @@ public:
             ),
             {},
         };
+    }
+
+    [[nodiscard]] GenerationBatchResult generationForwardBatch(
+        std::vector<GenerationBatchItem> const& batch) override
+    {
+        batch_sizes.push_back(batch.size());
+        return GenerationModelRunner::generationForwardBatch(batch);
     }
 };
 
@@ -222,6 +230,9 @@ void testConcurrencyAndReference()
         }
         expect(scheduler.takeTerminals().empty(),
             "terminal delivery is unique");
+        expect(!runner.batch_sizes.empty()
+            && runner.batch_sizes.front() == concurrency,
+            "c1/c2/c4 is submitted as one model batch");
         expectReclaimed(backend, scheduler, "c1/c2/c4");
     }
 }
@@ -233,7 +244,8 @@ void testDynamicJoinFifoAndShortExit()
     IterationSchedulerRuntime scheduler(backend, runner, {4, 2, 4096});
     expect(scheduler.submit(request(1, 6, 2)).ok(), "long request accepted");
     SchedulerIterationResult first = scheduler.runIteration();
-    expect(first.model_forward_tokens == 1, "first iteration advances long");
+    expect(first.model_forward_tokens == 2 && first.prefill_tokens == 2,
+        "first iteration advances a two-token prefill chunk");
     expect(scheduler.submit(request(2, 1, 1)).ok(),
         "request dynamically joins at iteration boundary");
     expect(scheduler.submit(request(3, 2, 2)).ok(),
@@ -251,6 +263,47 @@ void testDynamicJoinFifoAndShortExit()
     std::vector<GenerationTerminal> rest = scheduler.drain();
     expect(rest.size() == 2, "remaining requests terminate once");
     expectReclaimed(backend, scheduler, "dynamic FIFO");
+}
+
+void testChunkedPrefillBudgetAndBatchAccounting()
+{
+    FakeKvBackend backend;
+    FakeModelRunner runner;
+    IterationSchedulerRuntime scheduler(backend, runner, {2, 6, 4096, 3});
+    expect(scheduler.submit(request(40, 5, 2)).ok(),
+        "first chunked-prefill request accepted");
+    expect(scheduler.submit(request(41, 5, 2)).ok(),
+        "second chunked-prefill request accepted");
+
+    SchedulerIterationResult first = scheduler.runIteration();
+    expect(first.model_forward_tokens == 6
+        && first.model_forward_batches == 3,
+        "chunked prefill consumes three two-request model batches");
+    expect(first.prefill_tokens == 6 && first.decode_tokens == 0,
+        "chunked prefill accounts prompt positions separately");
+    expect(runner.calls[40] == 3 && runner.calls[41] == 3,
+        "prefill chunk advances each request by configured quota");
+    expect(runner.batch_sizes.size() == 3
+        && std::all_of(
+            runner.batch_sizes.begin(), runner.batch_sizes.end(),
+            [](std::size_t size) { return size == 2; }
+        ), "each prefill wave is a real two-request model batch");
+
+    std::vector<GenerationTerminal> terminals = scheduler.drain();
+    expect(terminals.size() == 2
+        && std::all_of(
+            terminals.begin(), terminals.end(),
+            [](GenerationTerminal const& terminal) {
+                return terminal.ok();
+            }
+        ), "chunked-prefill requests complete successfully");
+    IterationSchedulerSnapshot const snapshot = scheduler.snapshot();
+    expect(snapshot.prefill_tokens == 10 && snapshot.decode_tokens == 2,
+        "snapshot separates all prefill and decode work");
+    expect(snapshot.model_forward_tokens == 12
+        && snapshot.model_forward_batches == 6,
+        "snapshot exposes cumulative batch utilization");
+    expectReclaimed(backend, scheduler, "chunked prefill");
 }
 
 void testAdmissionGates()
@@ -380,6 +433,7 @@ int main()
 {
     testConcurrencyAndReference();
     testDynamicJoinFifoAndShortExit();
+    testChunkedPrefillBudgetAndBatchAccounting();
     testAdmissionGates();
     testCancellationFailureAndOomIsolation();
     testRuntimeStopAndPressureStability();

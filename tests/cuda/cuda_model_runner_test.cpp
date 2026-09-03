@@ -742,9 +742,12 @@ void testIterationSchedulerRuntime()
         }
 
         IterationSchedulerRuntime scheduler(
-            *backend, *created.runner, {concurrency, concurrency, 1024}
+            *backend,
+            *created.runner,
+            {concurrency, concurrency * 2, 1024, 2}
         );
         std::unordered_map<RequestId, std::vector<std::uint32_t>> expected;
+        std::uint64_t expected_prefill_tokens = 0;
         for (std::uint32_t index = 0; index < concurrency; ++index) {
             RequestId const request_id = 100 + concurrency * 10 + index;
             std::vector<std::uint32_t> input(2 + index);
@@ -757,6 +760,7 @@ void testIterationSchedulerRuntime()
             std::vector<std::uint32_t> output = referenceGeneration(
                 archive, input, 3
             );
+            expected_prefill_tokens += input.size();
             std::uint32_t const eos = eosOutside(
                 output, archive.config.vocabulary_size
             );
@@ -791,6 +795,16 @@ void testIterationSchedulerRuntime()
         expect(state.activeCount() == 0
             && state.reserved_kv_tokens == 0,
             "CUDA scheduler reclaims admission budgets");
+        expect(state.prefill_tokens == expected_prefill_tokens
+            && state.decode_tokens == concurrency * 2,
+            "CUDA scheduler accounts chunked prefill and decode tokens");
+        expect(state.model_forward_tokens
+            == state.prefill_tokens + state.decode_tokens,
+            "CUDA scheduler accounts every model batch lane");
+        if (concurrency > 1) {
+            expect(state.model_forward_batches < state.model_forward_tokens,
+                "CUDA scheduler executes multi-request dense batches");
+        }
         expect(backend->checkInvariants(),
             "CUDA scheduler preserves backend invariants");
     }

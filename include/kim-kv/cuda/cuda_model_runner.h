@@ -94,6 +94,17 @@ struct ModelRunnerOutputOptions final {
     bool copy_logits{true};
 };
 
+struct CudaModelRunnerOptions final {
+    // Workspace is allocated once at construction and never resized in the
+    // token path. Eight covers the c1/c2/c4 serving matrix with headroom.
+    std::uint32_t max_batch_size{8};
+
+    [[nodiscard]] constexpr bool valid() const noexcept
+    {
+        return max_batch_size != 0;
+    }
+};
+
 struct CudaModelRunnerCreateResult;
 
 class CudaTinyLlamaModelRunner final : public GenerationModelRunner {
@@ -111,6 +122,7 @@ public:
     [[nodiscard]] TinyLlamaConfig config() const noexcept;
     [[nodiscard]] std::uint64_t deviceWeightBytes() const noexcept;
     [[nodiscard]] std::uint64_t deviceWorkspaceBytes() const noexcept;
+    [[nodiscard]] std::uint32_t maxBatchSize() const noexcept;
 
     // Executes exactly one pre-tokenized position. The request must already
     // exist in EngineKvBackend and expected_position must equal its committed
@@ -131,6 +143,12 @@ public:
         std::uint32_t expected_position
     ) override;
 
+    [[nodiscard]] GenerationBatchResult generationForwardBatch(
+        std::vector<GenerationBatchItem> const& batch
+    ) override;
+
+    [[nodiscard]] std::uint32_t generationMaxBatchSize() const noexcept override;
+
 private:
     explicit CudaTinyLlamaModelRunner(std::unique_ptr<Impl> impl) noexcept;
     std::unique_ptr<Impl> impl_{};
@@ -140,7 +158,8 @@ private:
         std::string const&,
         std::string const&,
         EngineKvBackend&,
-        EngineStream
+        EngineStream,
+        CudaModelRunnerOptions
     );
 };
 
@@ -160,7 +179,8 @@ struct CudaModelRunnerCreateResult final {
     std::string const& manifest_path,
     std::string const& data_path,
     EngineKvBackend& kv_backend,
-    EngineStream stream
+    EngineStream stream,
+    CudaModelRunnerOptions options = {}
 );
 
 } // namespace kimkvcache

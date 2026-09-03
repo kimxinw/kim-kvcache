@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -21,6 +22,35 @@ using Clock = std::chrono::steady_clock;
 }
 
 } // namespace
+
+GenerationBatchResult GenerationModelRunner::generationForwardBatch(
+    std::vector<GenerationBatchItem> const& batch)
+{
+    GenerationBatchResult result;
+    if (batch.empty()) {
+        result.detail = "generation batch must not be empty";
+        return result;
+    }
+    try {
+        result.steps.reserve(batch.size());
+        for (GenerationBatchItem const& item : batch) {
+            result.steps.push_back(generationForwardToken(
+                item.request_id, item.token_id, item.expected_position
+            ));
+        }
+    } catch (std::bad_alloc const&) {
+        result.steps.clear();
+        result.detail = "generation batch result allocation failed";
+        return result;
+    }
+    result.success = true;
+    return result;
+}
+
+std::uint32_t GenerationModelRunner::generationMaxBatchSize() const noexcept
+{
+    return std::numeric_limits<std::uint32_t>::max();
+}
 
 void GenerationCancellationToken::cancel() noexcept
 {

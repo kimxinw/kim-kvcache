@@ -90,7 +90,7 @@ def main() -> None:
             "reference_dtype": "float16",
             "attention_implementation": "eager",
             "reference_prefill": "batched_by_prompt_length",
-            "runtime_prefill": "serial_token",
+            "runtime_prefill": "chunked_causal_waves",
         },
     }
     report["passed"] = report["all_tokens_equal"] and len(comparisons) > 0

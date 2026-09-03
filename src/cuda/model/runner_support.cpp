@@ -26,6 +26,19 @@ constexpr std::size_t kAlignment = 256;
     return true;
 }
 
+[[nodiscard]] bool multiply(
+    std::size_t value,
+    std::uint32_t factor,
+    std::size_t& result) noexcept
+{
+    if (factor == 0
+        || value > std::numeric_limits<std::size_t>::max() / factor) {
+        return false;
+    }
+    result = value * factor;
+    return true;
+}
+
 } // namespace
 
 CudaModelRunnerStatus failure(
@@ -72,23 +85,34 @@ CudaModelRunnerStatus kvFailure(
 
 bool makeWorkspaceLayout(
     TinyLlamaConfig const& config,
+    std::uint32_t max_batch_size,
     WorkspaceLayout& layout) noexcept
 {
     std::size_t cursor = 0;
-    std::size_t const hidden_bytes =
+    std::size_t hidden_bytes =
         static_cast<std::size_t>(config.hidden_size) * sizeof(KvScalar);
-    std::size_t const kv_bytes = static_cast<std::size_t>(
+    std::size_t kv_bytes = static_cast<std::size_t>(
         config.kv_head_count * config.head_dimension
     ) * sizeof(KvScalar);
-    std::size_t const intermediate_bytes =
+    std::size_t intermediate_bytes =
         static_cast<std::size_t>(config.intermediate_size)
         * sizeof(KvScalar);
-    std::size_t const logits_bytes =
+    std::size_t logits_bytes =
         static_cast<std::size_t>(config.vocabulary_size) * sizeof(float);
-    std::size_t const score_bytes =
+    std::size_t score_bytes =
         static_cast<std::size_t>(config.attention_head_count)
         * config.max_position_embeddings * sizeof(float);
-    bool const valid = addRegion(hidden_bytes, cursor, layout.hidden)
+    std::size_t token_id_bytes = sizeof(std::uint32_t);
+    bool const scaled = multiply(hidden_bytes, max_batch_size, hidden_bytes)
+        && multiply(kv_bytes, max_batch_size, kv_bytes)
+        && multiply(intermediate_bytes, max_batch_size, intermediate_bytes)
+        && multiply(logits_bytes, max_batch_size, logits_bytes)
+        && multiply(score_bytes, max_batch_size, score_bytes)
+        && multiply(token_id_bytes, max_batch_size, token_id_bytes);
+    bool const valid = scaled
+        && addRegion(token_id_bytes, cursor, layout.token_ids)
+        && addRegion(token_id_bytes, cursor, layout.positions)
+        && addRegion(hidden_bytes, cursor, layout.hidden)
         && addRegion(hidden_bytes, cursor, layout.normalized)
         && addRegion(hidden_bytes, cursor, layout.query)
         && addRegion(kv_bytes, cursor, layout.key)
@@ -99,7 +123,7 @@ bool makeWorkspaceLayout(
         && addRegion(intermediate_bytes, cursor, layout.up)
         && addRegion(intermediate_bytes, cursor, layout.activated)
         && addRegion(logits_bytes, cursor, layout.logits)
-        && addRegion(sizeof(std::uint32_t), cursor, layout.greedy_token)
+        && addRegion(token_id_bytes, cursor, layout.greedy_token)
         && addRegion(score_bytes, cursor, layout.attention_scores);
     if (valid) {
         layout.bytes = aligned(cursor);
@@ -152,6 +176,20 @@ CudaModelRunnerStatus CudaTinyLlamaModelRunner::Impl::gemv(
     std::uint32_t columns,
     std::string const& operation) const
 {
+    return gemmBatch(
+        matrix, input, output, rows, columns, 1, operation
+    );
+}
+
+CudaModelRunnerStatus CudaTinyLlamaModelRunner::Impl::gemmBatch(
+    KvScalar const* matrix,
+    KvScalar const* input,
+    KvScalar* output,
+    std::uint32_t rows,
+    std::uint32_t columns,
+    std::uint32_t batch_size,
+    std::string const& operation) const
+{
     float const alpha = 1.0F;
     float const beta = 0.0F;
     cublasStatus_t const status = cublasGemmEx(
@@ -159,7 +197,7 @@ CudaModelRunnerStatus CudaTinyLlamaModelRunner::Impl::gemv(
         CUBLAS_OP_T,
         CUBLAS_OP_N,
         static_cast<int>(rows),
-        1,
+        static_cast<int>(batch_size),
         static_cast<int>(columns),
         &alpha,
         matrix,
@@ -185,6 +223,15 @@ CudaModelRunnerStatus CudaTinyLlamaModelRunner::Impl::logitsGemv(
     KvScalar const* input,
     float* output) const
 {
+    return logitsGemmBatch(matrix, input, output, 1);
+}
+
+CudaModelRunnerStatus CudaTinyLlamaModelRunner::Impl::logitsGemmBatch(
+    KvScalar const* matrix,
+    KvScalar const* input,
+    float* output,
+    std::uint32_t batch_size) const
+{
     float const alpha = 1.0F;
     float const beta = 0.0F;
     TinyLlamaConfig const& config = manifest.config;
@@ -193,7 +240,7 @@ CudaModelRunnerStatus CudaTinyLlamaModelRunner::Impl::logitsGemv(
         CUBLAS_OP_T,
         CUBLAS_OP_N,
         static_cast<int>(config.vocabulary_size),
-        1,
+        static_cast<int>(batch_size),
         static_cast<int>(config.hidden_size),
         &alpha,
         matrix,
