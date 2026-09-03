@@ -3,7 +3,7 @@
 #include "kim-kv/engine/generation.h"
 #include "kim-kv/engine/engine_kv.h"
 #include "kim-kv/model/tinyllama_config.h"
-#include "kim-kv/reference/kv_layout.h"
+#include "kim-kv/core/kv_layout.h"
 
 #include <cstdint>
 #include <memory>

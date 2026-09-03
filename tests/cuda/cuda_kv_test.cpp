@@ -1,5 +1,6 @@
 #include "kim-kv/cuda/cuda_kv_cache.h"
 #include "kim-kv/cuda/fixed_cuda_kv_cache.h"
+#include "storage.h"
 #include "kim-kv/reference/kv_reference.h"
 
 #include <cuda_runtime_api.h>

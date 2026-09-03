@@ -1,6 +1,6 @@
 #pragma once
 
-#include "kim-kv/cuda/cuda_kv_storage.h"
+#include "kim-kv/cuda/cuda_status.h"
 #include "kim-kv/engine/engine_kv.h"
 
 #include <cstdint>

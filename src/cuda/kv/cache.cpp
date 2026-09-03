@@ -1,5 +1,7 @@
 #include "kim-kv/cuda/cuda_kv_cache.h"
 
+#include "storage.h"
+
 #include <utility>
 
 namespace kimkvcache {
@@ -11,6 +13,16 @@ namespace {
     return submitted.ok() ? submission.wait() : submitted;
 }
 
+[[nodiscard]] CudaKvOperationResult finishReadOperation(
+    KvCacheManager& manager,
+    PageLeaseId lease_id,
+    CudaSubmission submission)
+{
+    CudaStatus const cuda_status = finalStatus(submission);
+    KvCacheError const lease_error = manager.releasePageLease(lease_id);
+    return CudaKvOperationResult{lease_error, cuda_status};
+}
+
 } // namespace
 
 CudaKvCache::CudaKvCache(
@@ -18,13 +30,16 @@ CudaKvCache::CudaKvCache(
     std::uint32_t micro_capacity,
     std::uint32_t extent_capacity)
     : manager_(micro_capacity, extent_capacity)
-    , storage_(layout, micro_capacity, extent_capacity)
+    , storage_(std::make_unique<CudaKvStorage>(
+        layout, micro_capacity, extent_capacity))
 {
 }
 
+CudaKvCache::~CudaKvCache() = default;
+
 CudaStatus CudaKvCache::status() const noexcept
 {
-    return storage_.status();
+    return storage_->status();
 }
 
 KvCacheError CudaKvCache::createRequest(RequestId request_id)
@@ -114,7 +129,7 @@ CudaKvOperationResult CudaKvCache::append(
         );
     }
 
-    CudaSubmission submission = storage_.appendAsync(
+    CudaSubmission submission = storage_->appendAsync(
         before.table,
         after.table,
         append_begin,
@@ -184,7 +199,7 @@ CudaKvOperationResult CudaKvCache::promote(
         );
     }
 
-    CudaSubmission submission = storage_.promoteAsync(prepared, stream);
+    CudaSubmission submission = storage_->promoteAsync(prepared, stream);
     CudaStatus const cuda_status = finalStatus(submission);
     KvCacheError const lease_error =
         manager_.releasePageLease(lease.lease_id);
@@ -213,15 +228,6 @@ CudaKvOperationResult CudaKvCache::promote(
     return CudaKvOperationResult{commit_error, cuda_status};
 }
 
-CudaKvOperationResult CudaKvCache::finishReadOperation(
-    PageLeaseId lease_id,
-    CudaSubmission submission)
-{
-    CudaStatus const cuda_status = finalStatus(submission);
-    KvCacheError const lease_error = manager_.releasePageLease(lease_id);
-    return CudaKvOperationResult{lease_error, cuda_status};
-}
-
 CudaKvOperationResult CudaKvCache::gather(
     RequestId request_id,
     KvScalar* device_output,
@@ -244,8 +250,9 @@ CudaKvOperationResult CudaKvCache::gather(
     }
 
     return finishReadOperation(
+        manager_,
         lease.lease_id,
-        storage_.gatherAsync(lease.table, device_output, stream)
+        storage_->gatherAsync(lease.table, device_output, stream)
     );
 }
 
@@ -274,8 +281,9 @@ CudaKvOperationResult CudaKvCache::referenceAttention(
     }
 
     return finishReadOperation(
+        manager_,
         lease.lease_id,
-        storage_.referenceAttentionAsync(
+        storage_->referenceAttentionAsync(
             lease.table,
             device_query,
             device_output,
@@ -297,7 +305,7 @@ KvCacheManagerSnapshot CudaKvCache::metadataSnapshot() const
 
 CudaStorageSnapshot CudaKvCache::storageSnapshot() const noexcept
 {
-    return storage_.snapshot();
+    return storage_->snapshot();
 }
 
 bool CudaKvCache::checkInvariants() const
@@ -307,7 +315,7 @@ bool CudaKvCache::checkInvariants() const
 
 void CudaKvCache::injectFailureOnce(CudaFailurePoint point) noexcept
 {
-    storage_.injectFailureOnce(point);
+    storage_->injectFailureOnce(point);
 }
 
 } // namespace kimkvcache

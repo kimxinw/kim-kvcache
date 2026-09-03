@@ -1,6 +1,6 @@
 #pragma once
 
-#include "kim-kv/reference/kv_layout.h"
+#include "kim-kv/core/kv_layout.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "kim-kv/cuda/cuda_kv_storage.h"
+#include "storage.h"
 
 #include <cuda_runtime_api.h>
 

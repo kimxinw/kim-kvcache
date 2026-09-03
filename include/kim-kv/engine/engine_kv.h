@@ -1,7 +1,7 @@
 #pragma once
 
 #include "kim-kv/core/page_handle.h"
-#include "kim-kv/reference/kv_layout.h"
+#include "kim-kv/core/kv_layout.h"
 #include "kim-kv/runtime/promotion.h"
 
 #include <cstddef>

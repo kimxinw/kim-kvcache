@@ -128,6 +128,11 @@ if(KIM_KV_ENABLE_CUDA)
         kim_kv_cuda
         CUDA::cudart
     )
+    target_include_directories(
+        cuda_kv_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/cuda/kv"
+    )
 
     add_kim_kv_contract(
         cuda_engine_kv_backend_test
@@ -136,6 +141,11 @@ if(KIM_KV_ENABLE_CUDA)
         60
         kim_kv_cuda
         CUDA::cudart
+    )
+    target_include_directories(
+        cuda_engine_kv_backend_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/cuda/kv"
     )
 
     add_kim_kv_contract(

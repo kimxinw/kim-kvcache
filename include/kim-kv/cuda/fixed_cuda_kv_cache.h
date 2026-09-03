@@ -4,6 +4,7 @@
 #include "kim-kv/fixed/fixed_page_manager.h"
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 
@@ -20,7 +21,7 @@ public:
         std::uint32_t page_capacity
     );
 
-    ~FixedCudaKvCache() = default;
+    ~FixedCudaKvCache();
 
     FixedCudaKvCache(FixedCudaKvCache const&) = delete;
     FixedCudaKvCache& operator=(FixedCudaKvCache const&) = delete;
@@ -74,7 +75,7 @@ private:
 
     std::uint16_t tokens_per_page_;
     FixedPageManager manager_;
-    CudaKvStorage storage_;
+    std::unique_ptr<CudaKvStorage> storage_;
     mutable std::mutex orchestration_mutex_;
 };
 

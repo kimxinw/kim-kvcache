@@ -1,19 +1,23 @@
 add_library(
     kim_kv_cuda
     STATIC
-        cuda_kv_cache.cpp
-        cuda_engine_transaction.cpp
-        cuda_engine_kv_backend.cpp
-        cuda_kv_append.cpp
-        cuda_kv_attention.cpp
-        cuda_kv_gather.cpp
-        cuda_kv_kernels.cu
-        cuda_kv_promotion.cpp
-        cuda_kv_storage.cpp
-        cuda_model_kernels.cu
-        cuda_model_runner.cpp
-        cuda_submission.cpp
-        fixed_cuda_kv_cache.cpp
+        attention/paged_decode_kernels.cu
+        attention/reference_attention.cpp
+        attention/reference_attention_kernels.cu
+        common/submission.cpp
+        engine/backend.cpp
+        engine/transaction.cpp
+        kv/append.cpp
+        kv/cache.cpp
+        kv/fixed_cache.cpp
+        kv/gather.cpp
+        kv/page_kernels.cu
+        kv/promotion.cpp
+        kv/storage.cpp
+        model/kernels.cu
+        model/runner.cpp
+        model/runner_factory.cpp
+        model/runner_support.cpp
 )
 
 set_target_properties(

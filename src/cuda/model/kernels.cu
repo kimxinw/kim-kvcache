@@ -1,4 +1,4 @@
-#include "cuda_model_kernels.cuh"
+#include "kernels.cuh"
 
 #include <cuda_fp16.h>
 

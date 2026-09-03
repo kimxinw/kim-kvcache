@@ -1,5 +1,6 @@
 #include "kim-kv/cuda/cuda_engine_kv_backend.h"
 
+#include "../kv/storage.h"
 #include "kim-kv/fixed/fixed_page_manager.h"
 #include "kim-kv/runtime/kv_cache_manager.h"
 

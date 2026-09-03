@@ -1,4 +1,4 @@
-#include "cuda_kv_storage_internal.cuh"
+#include "storage_internal.cuh"
 
 #include <cstddef>
 #include <utility>

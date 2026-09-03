@@ -3,7 +3,7 @@
 #include "kim-kv/core/block_table.h"
 #include "kim-kv/cuda/cuda_status.h"
 #include "kim-kv/engine/engine_kv.h"
-#include "kim-kv/reference/kv_layout.h"
+#include "kim-kv/core/kv_layout.h"
 #include "kim-kv/runtime/promotion.h"
 
 #include <cstddef>
@@ -11,24 +11,6 @@
 #include <memory>
 
 namespace kimkvcache {
-
-// 对外使用 opaque stream，避免公共头强制依赖 cuda_runtime_api.h。
-// nullptr 表示 CUDA default stream。
-using CudaStream = void*;
-
-struct CudaStorageSnapshot final {
-    std::uint32_t micro_capacity{0};
-    std::uint32_t extent_capacity{0};
-    std::uint16_t micro_page_tokens{kMicroPageTokenCapacity};
-    std::uint16_t extent_page_tokens{kExtentPageTokenCapacity};
-    std::size_t micro_reserved_bytes{0};
-    std::size_t extent_reserved_bytes{0};
-
-    [[nodiscard]] constexpr std::size_t totalReservedBytes() const noexcept
-    {
-        return micro_reserved_bytes + extent_reserved_bytes;
-    }
-};
 
 // Owns one Reserve -> per-layer Write/Attend -> token-boundary completion
 // sequence. Descriptor upload happens once at construction; layer calls only

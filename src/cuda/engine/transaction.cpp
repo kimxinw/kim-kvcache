@@ -1,4 +1,4 @@
-#include "cuda_kv_storage_internal.cuh"
+#include "../kv/storage_internal.cuh"
 
 #include <algorithm>
 #include <limits>

@@ -1,12 +1,16 @@
 #pragma once
 
-#include "kim-kv/cuda/cuda_kv_storage.h"
+#include "kim-kv/core/kv_layout.h"
+#include "kim-kv/cuda/cuda_status.h"
 #include "kim-kv/runtime/kv_cache_manager.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace kimkvcache {
+
+class CudaKvStorage;
 
 struct CudaKvOperationResult final {
     KvCacheError metadata_error{KvCacheError::None};
@@ -34,7 +38,7 @@ public:
         std::uint32_t extent_capacity
     );
 
-    ~CudaKvCache() = default;
+    ~CudaKvCache();
 
     CudaKvCache(CudaKvCache const&) = delete;
     CudaKvCache& operator=(CudaKvCache const&) = delete;
@@ -91,13 +95,8 @@ private:
         KvCacheError error
     ) noexcept;
 
-    [[nodiscard]] CudaKvOperationResult finishReadOperation(
-        PageLeaseId lease_id,
-        CudaSubmission submission
-    );
-
     KvCacheManager manager_;
-    CudaKvStorage storage_;
+    std::unique_ptr<CudaKvStorage> storage_;
 };
 
 } // namespace kimkvcache

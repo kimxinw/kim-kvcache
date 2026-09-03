@@ -1,5 +1,7 @@
 #include "kim-kv/cuda/fixed_cuda_kv_cache.h"
 
+#include "storage.h"
+
 #include <utility>
 
 namespace kimkvcache {
@@ -19,19 +21,21 @@ FixedCudaKvCache::FixedCudaKvCache(
     std::uint32_t page_capacity)
     : tokens_per_page_(tokens_per_page)
     , manager_(tokens_per_page, page_capacity)
-    , storage_(
+    , storage_(std::make_unique<CudaKvStorage>(
         layout,
         page_capacity,
         0,
         tokens_per_page,
         kExtentPageTokenCapacity
-    )
+    ))
 {
 }
 
+FixedCudaKvCache::~FixedCudaKvCache() = default;
+
 CudaStatus FixedCudaKvCache::status() const noexcept
 {
-    return storage_.status();
+    return storage_->status();
 }
 
 std::uint16_t FixedCudaKvCache::tokensPerPage() const noexcept
@@ -109,7 +113,7 @@ CudaKvOperationResult FixedCudaKvCache::append(
         return metadataFailure(KvCacheError::RequestNotFound);
     }
 
-    CudaSubmission submission = storage_.appendAsync(
+    CudaSubmission submission = storage_->appendAsync(
         *before,
         *after,
         append_begin,
@@ -141,7 +145,7 @@ CudaKvOperationResult FixedCudaKvCache::gather(
     if (!table.has_value()) {
         return metadataFailure(KvCacheError::RequestNotFound);
     }
-    CudaSubmission submission = storage_.gatherAsync(
+    CudaSubmission submission = storage_->gatherAsync(
         *table,
         device_output,
         stream
@@ -165,7 +169,7 @@ CudaKvOperationResult FixedCudaKvCache::referenceAttention(
     if (!table.has_value()) {
         return metadataFailure(KvCacheError::RequestNotFound);
     }
-    CudaSubmission submission = storage_.referenceAttentionAsync(
+    CudaSubmission submission = storage_->referenceAttentionAsync(
         *table,
         device_query,
         device_output,
@@ -189,7 +193,7 @@ FixedPageManagerSnapshot FixedCudaKvCache::metadataSnapshot() const
 
 CudaStorageSnapshot FixedCudaKvCache::storageSnapshot() const noexcept
 {
-    return storage_.snapshot();
+    return storage_->snapshot();
 }
 
 bool FixedCudaKvCache::checkInvariants() const
@@ -201,7 +205,7 @@ bool FixedCudaKvCache::checkInvariants() const
 void FixedCudaKvCache::injectFailureOnce(
     CudaFailurePoint point) noexcept
 {
-    storage_.injectFailureOnce(point);
+    storage_->injectFailureOnce(point);
 }
 
 } // namespace kimkvcache
