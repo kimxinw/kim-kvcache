@@ -1,0 +1,59 @@
+{
+  "engine_promotion_active": false,
+  "fairness": {
+    "config_equal": true,
+    "cross_variant_tokens_equal": true,
+    "storage_budget_equal": true,
+    "token_cases": {
+      "decode_long_prompt_c1": true,
+      "decode_long_prompt_c2": true,
+      "decode_long_prompt_c4": true,
+      "decode_short_c1": true,
+      "decode_short_c2": true,
+      "decode_short_c4": true,
+      "mixed_c4": true
+    },
+    "transformers_reference_passed": true,
+    "transformers_reference_prompts": 8
+  },
+  "hetero_secondary_allocations": 0,
+  "hetero_vs_fixed_8": {
+    "decode_long_prompt_c1": {
+      "e2e_p50_delta_percent": 6.156169334166851,
+      "output_tokens_per_second_delta_percent": -5.752430664173821,
+      "tpot_p50_delta_percent": 6.018965889095742
+    },
+    "decode_long_prompt_c2": {
+      "e2e_p50_delta_percent": 10.121085063072846,
+      "output_tokens_per_second_delta_percent": -9.775368689793606,
+      "tpot_p50_delta_percent": 12.967756520162558
+    },
+    "decode_long_prompt_c4": {
+      "e2e_p50_delta_percent": 7.034303684461405,
+      "output_tokens_per_second_delta_percent": -6.849982289109326,
+      "tpot_p50_delta_percent": 3.1289010526522727
+    },
+    "decode_short_c1": {
+      "e2e_p50_delta_percent": 7.092928225710043,
+      "output_tokens_per_second_delta_percent": -6.517017327329494,
+      "tpot_p50_delta_percent": 7.0898175155125225
+    },
+    "decode_short_c2": {
+      "e2e_p50_delta_percent": 6.41733822250717,
+      "output_tokens_per_second_delta_percent": -6.107878657549589,
+      "tpot_p50_delta_percent": 6.7425626919381285
+    },
+    "decode_short_c4": {
+      "e2e_p50_delta_percent": 8.250279622606884,
+      "output_tokens_per_second_delta_percent": -6.948148290488378,
+      "tpot_p50_delta_percent": 7.6413775414432745
+    },
+    "mixed_c4": {
+      "e2e_p50_delta_percent": 6.335086500454723,
+      "output_tokens_per_second_delta_percent": -6.469553204629477,
+      "tpot_p50_delta_percent": 4.019946511327613
+    }
+  },
+  "schema_version": 1,
+  "successful": true
+}

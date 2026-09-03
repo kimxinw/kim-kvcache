@@ -307,6 +307,19 @@ struct EngineKvBackendSnapshot final {
     std::uint64_t request_count{0};
     std::uint64_t active_transaction_count{0};
     std::uint64_t committed_token_count{0};
+    // Policy-neutral page telemetry. Fixed backends only populate primary;
+    // Heterogeneous backends expose Micro as primary and Extent as secondary.
+    std::uint16_t primary_page_tokens{0};
+    std::uint16_t secondary_page_tokens{0};
+    std::uint32_t primary_page_capacity{0};
+    std::uint32_t secondary_page_capacity{0};
+    std::uint32_t allocated_primary_pages{0};
+    std::uint32_t allocated_secondary_pages{0};
+    std::uint64_t successful_primary_allocations{0};
+    std::uint64_t successful_secondary_allocations{0};
+    std::uint64_t failed_primary_allocations{0};
+    std::uint64_t failed_secondary_allocations{0};
+    std::uint64_t storage_reserved_bytes{0};
 };
 
 // ModelRunner/Scheduler 只依赖该接口。Fixed 与 Heterogeneous 后端必须保持

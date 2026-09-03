@@ -82,3 +82,29 @@ cannot be consumed entirely by an earlier kernel. Nsight Systems collection is
 valid only when both `cuda_gpu_kern_sum` and `cuda_api_sum` contain data. The
 script treats a missing or header-only report as an error even when `nsys`
 itself exits successfully.
+
+E5 adds a separate real-model end-to-end matrix. It must not be mixed with K6
+Data Path samples:
+
+```text
+benchmarks/results/<source>_<UTC timestamp>_e5/
+├── MANIFEST.txt
+├── SOURCE_SHA256SUMS             # present for pre-commit pinned runs
+├── SHA256SUMS
+├── REPORT.md
+├── comparison.json
+├── reference_validation.json
+├── summary.csv
+└── variants/
+    ├── fixed_8.json
+    ├── fixed_16.json
+    ├── fixed_32.json
+    ├── fixed_64.json
+    └── hetero_8_64.json
+```
+
+`scripts/run_e5_end_to_end.sh` runs Release contracts, three or more measured
+rounds, the five page strategies, a Transformers FP16 reference, capacity and
+fault workloads, analysis, and checksums. A clean committed tree is required
+for a formal run. `KIM_KV_ALLOW_DIRTY=1` is development-only; such evidence
+must say `precommit_source_hash_pinned` and record exact changed-source hashes.

@@ -1,0 +1,21 @@
+schema_version=1
+stage=E5
+evidence_status=precommit_source_hash_pinned
+source_commit=f585d4a087d65bddab6599d576b6e135f21bd36b
+working_tree_clean=false
+reason=the user owns the E5 git commit; exact changed sources are pinned in SOURCE_SHA256SUMS
+timestamp_utc=20260902T123822Z
+gpu=NVIDIA GeForce RTX 3060
+cuda_runtime=12060
+variants=fixed_8 fixed_16 fixed_32 fixed_64 hetero_8_64
+workloads=decode_short decode_long_prompt mixed fault capacity
+concurrency=1 2 4; capacity=17
+warmup=1
+measured_iterations=3
+kv_capacity_tokens=8192
+capacity_probe_tokens=512
+performance_storage_bytes=184549376
+loaded_gpu_bytes=2399141888
+model_manifest_sha256=e8076bba8e05b6dcbd8e7a8a474a522e69d16958a93e6da30133a947622f9ba1
+model_weights_sha256=5a25040a72885d3dbf246f6819b09da797eedf2ebee830b3ac98791d4efbeb99
+benchmark_binary_sha256=35a5270b36b4baca176ca8a63b02be12dc86878d01da047aef838aed062f8c74
