@@ -421,11 +421,43 @@ public:
         for (auto const& entry : state_->committed_lengths) {
             committed += entry.second;
         }
-        return EngineKvBackendSnapshot{
-            state_->committed_lengths.size(),
-            state_->active_transactions,
-            committed,
-        };
+        EngineKvBackendSnapshot result;
+        result.request_count = state_->committed_lengths.size();
+        result.active_transaction_count = state_->active_transactions;
+        result.committed_token_count = committed;
+        CudaStorageSnapshot const storage = state_->storage.snapshot();
+        result.storage_reserved_bytes = storage.totalReservedBytes();
+        if (state_->heterogeneous != nullptr) {
+            KvCacheManagerSnapshot const metadata =
+                state_->heterogeneous->snapshot();
+            result.primary_page_tokens = kMicroPageTokenCapacity;
+            result.secondary_page_tokens = kExtentPageTokenCapacity;
+            result.primary_page_capacity = metadata.micro_pool.total_slots;
+            result.secondary_page_capacity = metadata.extent_pool.total_slots;
+            result.allocated_primary_pages =
+                metadata.micro_pool.allocated_slots;
+            result.allocated_secondary_pages =
+                metadata.extent_pool.allocated_slots;
+            result.successful_primary_allocations =
+                metadata.micro_pool.successful_allocations;
+            result.successful_secondary_allocations =
+                metadata.extent_pool.successful_allocations;
+            result.failed_primary_allocations =
+                metadata.micro_pool.failed_allocations;
+            result.failed_secondary_allocations =
+                metadata.extent_pool.failed_allocations;
+        } else {
+            FixedPageManagerSnapshot const metadata =
+                state_->fixed->snapshot();
+            result.primary_page_tokens = state_->fixed->tokensPerPage();
+            result.primary_page_capacity = metadata.pool.total_slots;
+            result.allocated_primary_pages = metadata.pool.allocated_slots;
+            result.successful_primary_allocations =
+                metadata.pool.successful_allocations;
+            result.failed_primary_allocations =
+                metadata.pool.failed_allocations;
+        }
+        return result;
     }
 
     [[nodiscard]] bool checkInvariants() const override

@@ -23,3 +23,16 @@ target_link_libraries(
         kim_kv_cuda
         CUDA::cudart
 )
+
+add_executable(
+    kim_kv_tinyllama_e2e_benchmark
+    tinyllama_e2e_benchmark.cpp
+)
+
+target_link_libraries(
+    kim_kv_tinyllama_e2e_benchmark
+    PRIVATE
+        kim_kv_warnings
+        kim_kv_cuda
+        CUDA::cudart
+)

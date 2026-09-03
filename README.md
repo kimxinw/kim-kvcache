@@ -56,12 +56,14 @@ Token 三类预算。第一版在共享 ModelRunner/Stream 上逐请求推进，
 | TinyLlama 数值 | Hidden/Logits 通过误差门禁，Top-10 `10/10` |
 | Generation | ISL32/128、OSL32 Token 与 Transformers FP16 全一致 |
 | Scheduler | CUDA 小模型 c1/c2/c4 Token 与独立 FP16 Reference 全一致 |
+| E5 端到端 | 五种 Page 策略完整 Token 一致；8 个唯一 Prompt 与 Transformers FP16 一致 |
+| E5 性能边界 | Hetero E2E p50 比 Fixed-8 慢 `6.16%～10.12%`，当前 Engine Extent 分配为 `0` |
 | 资源稳定性 | 真实模型连续 100 次结果一致，KV 归零，GPU 空闲显存差值 `0` |
 | Long Gather | Hetero 相比 Fixed-8 降低 `65.03%` |
 | 容量模型 | 相比 Fixed-64，碎片降低 `88.69%～91.63%` |
 
-结果位于 `tests/reference` 和 `benchmarks/results`。Benchmark 数据是独立 KV Data Path
-结果，不代表端到端模型 Serving 加速。
+结果位于 `tests/reference` 和 `benchmarks/results`。K6 是独立 KV Data Path 证据；E5
+单独报告真实模型端到端结果，两者不能互相替代。
 
 ## 构建与测试
 
@@ -98,11 +100,21 @@ python scripts/validate_tinyllama_generation.py \
 
 KV Benchmark 可通过 `scripts/run_k6_release_matrix.sh` 运行。
 
+E5 端到端 Fixed/Heterogeneous 公平矩阵通过以下命令运行：
+
+```bash
+KIM_KV_MODEL_MANIFEST=/path/to/model.manifest \
+KIM_KV_MODEL_WEIGHTS=/path/to/model.weights \
+KIM_KV_REFERENCE_PYTHON=/path/to/python-with-torch \
+scripts/run_e5_end_to_end.sh
+```
+
 ## 当前范围
 
 当前实现为单 GPU、单模型、同步 Iteration Scheduler；每轮在共享 Stream 上串行推进
 最多 `max_batched_tokens` 个请求。尚未实现融合/并行 Batch Model Forward。
 
 ## TODO
-- Fixed/Heterogeneous 端到端模型对照；
-- 正式 TTFT、TPOT 和吞吐 Benchmark。
+- 在 Engine Generation 路径接入自动 Promotion，使 Extent Pool 参与端到端执行；
+- 实现融合/并行 Batched Model Forward；
+- 接入 `kim-llm-serving` MiniEngine Backend。

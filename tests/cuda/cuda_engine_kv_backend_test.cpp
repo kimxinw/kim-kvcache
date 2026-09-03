@@ -256,6 +256,19 @@ void testBackend(
         : createFixedCudaEngineKvBackend(config, fixed_page_tokens, 32);
     expect(backend != nullptr, "create CUDA engine backend");
     expect(backend->kind() == kind, "backend kind");
+    EngineKvBackendSnapshot const initial = backend->snapshot();
+    expect(initial.primary_page_tokens
+            == (kind == EngineKvBackendKind::Heterogeneous
+                ? kMicroPageTokenCapacity
+                : fixed_page_tokens),
+        "snapshot exposes primary page size");
+    expect(initial.primary_page_capacity == 32,
+        "snapshot exposes primary page capacity");
+    expect(initial.secondary_page_capacity
+            == (kind == EngineKvBackendKind::Heterogeneous ? 4U : 0U),
+        "snapshot distinguishes heterogeneous secondary pool");
+    expect(initial.storage_reserved_bytes != 0,
+        "snapshot exposes reserved CUDA storage bytes");
     expect(backend->createRequest(1).ok(), "create engine request");
 
     DeviceBuffers device;
@@ -270,6 +283,9 @@ void testBackend(
         backend->snapshot().committed_token_count == 10,
         "ten committed tokens"
     );
+    expect(backend->snapshot().allocated_primary_pages != 0
+        && backend->snapshot().successful_primary_allocations != 0,
+        "snapshot exposes live and cumulative page allocations");
 
     expect(backend->forkRequest(1, 2).ok(), "fork engine request");
     std::vector<int> child_history = parent_history;
@@ -312,6 +328,9 @@ void testBackend(
     EngineKvBackendSnapshot const empty = backend->snapshot();
     expect(empty.request_count == 0, "all requests released");
     expect(empty.committed_token_count == 0, "released token count cleared");
+    expect(empty.allocated_primary_pages == 0
+        && empty.allocated_secondary_pages == 0,
+        "released backend reports no allocated pages");
     expect(backend->checkInvariants(), "final engine invariants");
 }
 
