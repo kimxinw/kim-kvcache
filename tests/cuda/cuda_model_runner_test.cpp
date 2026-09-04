@@ -804,6 +804,14 @@ void testIterationSchedulerRuntime()
         if (concurrency > 1) {
             expect(state.model_forward_batches < state.model_forward_tokens,
                 "CUDA scheduler executes multi-request dense batches");
+            expect(kv.batched_attention_submissions != 0
+                    && kv.batched_attention_lanes
+                        > kv.batched_attention_submissions,
+                "CUDA scheduler submits multi-lane paged attention batches");
+        } else {
+            expect(kv.batched_attention_submissions == 0
+                    && kv.batched_attention_lanes == 0,
+                "single-request CUDA scheduler keeps scalar attention path");
         }
         expect(backend->checkInvariants(),
             "CUDA scheduler preserves backend invariants");

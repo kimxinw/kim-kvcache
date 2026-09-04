@@ -425,8 +425,10 @@ GenerationBatchResult CudaTinyLlamaModelRunner::generationForwardBatch(
     std::vector<std::uint32_t> token_ids;
     std::vector<std::uint32_t> positions;
     std::vector<TokenTransaction> transactions;
+    std::vector<PagedDecodeBatchItem> attention_batch_items;
     try {
         result.steps.resize(batch.size());
+        attention_batch_items.resize(batch.size());
         active_indices.reserve(batch.size());
         token_ids.reserve(batch.size());
         positions.reserve(batch.size());
@@ -541,6 +543,10 @@ GenerationBatchResult CudaTinyLlamaModelRunner::generationForwardBatch(
         impl_->workspace<std::uint32_t>(offsets.greedy_token);
     float* const attention_scores =
         impl_->workspace<float>(offsets.attention_scores);
+    DevicePagedDecodeBatchItem* const device_attention_batch_items =
+        impl_->workspace<DevicePagedDecodeBatchItem>(
+            offsets.attention_batch_items
+        );
 
     std::size_t const index_bytes = static_cast<std::size_t>(batch_size)
         * sizeof(std::uint32_t);
@@ -645,26 +651,77 @@ GenerationBatchResult CudaTinyLlamaModelRunner::generationForwardBatch(
                     false, 0, kvFailure(write, "write batched layer kv").detail,
                 };
                 active[lane] = false;
-                continue;
             }
-            EngineKvStatus const attended = transactions[lane].attendLayer(
-                PagedDecodeRequest{
-                    layer,
-                    query + static_cast<std::size_t>(lane)
-                        * config.hidden_size,
-                    attention + static_cast<std::size_t>(lane)
-                        * config.hidden_size,
-                    attention_scores + static_cast<std::size_t>(lane)
-                        * config.attention_head_count
-                        * config.max_position_embeddings,
-                    score_bytes_per_lane,
-                    attention_scale,
+        }
+        std::size_t const attention_lane_count = static_cast<std::size_t>(
+            std::count(active.begin(), active.end(), true)
+        );
+        if (attention_lane_count == 0) {
+            return result;
+        }
+
+        auto attentionRequest = [&](std::uint32_t lane) {
+            return PagedDecodeRequest{
+                layer,
+                query + static_cast<std::size_t>(lane)
+                    * config.hidden_size,
+                attention + static_cast<std::size_t>(lane)
+                    * config.hidden_size,
+                attention_scores + static_cast<std::size_t>(lane)
+                    * config.attention_head_count
+                    * config.max_position_embeddings,
+                score_bytes_per_lane,
+                attention_scale,
+            };
+        };
+        if (attention_lane_count == 1) {
+            for (std::uint32_t lane = 0; lane < batch_size; ++lane) {
+                if (!active[lane]) {
+                    continue;
                 }
-            );
-            if (!attended.ok()) {
+                EngineKvStatus const attended =
+                    transactions[lane].attendLayer(attentionRequest(lane));
+                if (!attended.ok()) {
+                    result.steps[active_indices[lane]] = {
+                        false,
+                        0,
+                        kvFailure(
+                            attended, "single-lane paged decode attention"
+                        ).detail,
+                    };
+                    active[lane] = false;
+                }
+            }
+        } else {
+            for (std::uint32_t lane = 0; lane < batch_size; ++lane) {
+                attention_batch_items[lane] = {};
+                if (active[lane]) {
+                    attention_batch_items[lane].transaction =
+                        &transactions[lane];
+                    attention_batch_items[lane].request =
+                        attentionRequest(lane);
+                }
+            }
+            PagedDecodeBatch attention_batch{
+                attention_batch_items.data(),
+                batch_size,
+                impl_->host_attention_batch_items.data(),
+                device_attention_batch_items,
+                impl_->host_attention_batch_items.size(),
+            };
+            attendLayerBatch(attention_batch);
+            for (std::uint32_t lane = 0; lane < batch_size; ++lane) {
+                if (!active[lane]
+                    || attention_batch_items[lane].status.ok()) {
+                    continue;
+                }
                 result.steps[active_indices[lane]] = {
-                    false, 0,
-                    kvFailure(attended, "batched paged decode attention").detail,
+                    false,
+                    0,
+                    kvFailure(
+                        attention_batch_items[lane].status,
+                        "batched paged decode attention"
+                    ).detail,
                 };
                 active[lane] = false;
             }

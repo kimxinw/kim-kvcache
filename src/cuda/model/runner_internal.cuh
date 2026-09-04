@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace kimkvcache::cuda_model_runner_detail {
 
@@ -29,6 +30,7 @@ struct WorkspaceLayout final {
     std::size_t logits{0};
     std::size_t greedy_token{0};
     std::size_t attention_scores{0};
+    std::size_t attention_batch_items{0};
     std::size_t bytes{0};
 };
 
@@ -71,6 +73,7 @@ struct CudaTinyLlamaModelRunner::Impl final {
     std::uint8_t* device_weights{nullptr};
     std::uint8_t* device_workspace{nullptr};
     cuda_model_runner_detail::WorkspaceLayout workspace_layout{};
+    std::vector<DevicePagedDecodeBatchItem> host_attention_batch_items{};
     std::uint32_t max_batch_size{0};
 
     ~Impl();

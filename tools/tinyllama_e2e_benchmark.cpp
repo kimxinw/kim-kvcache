@@ -74,6 +74,8 @@ struct RunEvidence final {
     std::uint64_t output_tokens{0};
     std::uint64_t model_forward_tokens{0};
     std::uint64_t model_forward_batches{0};
+    std::uint64_t batched_attention_submissions{0};
+    std::uint64_t batched_attention_lanes{0};
     std::uint64_t prefill_tokens{0};
     std::uint64_t decode_tokens{0};
     std::uint32_t accepted{0};
@@ -556,6 +558,11 @@ void destroyContext(SuiteContext& context) noexcept
         }
     );
     EngineKvBackendSnapshot const after = context.backend->snapshot();
+    result.batched_attention_submissions =
+        after.batched_attention_submissions
+        - before.batched_attention_submissions;
+    result.batched_attention_lanes = after.batched_attention_lanes
+        - before.batched_attention_lanes;
     result.resources_reclaimed = scheduler_state.activeCount() == 0
         && scheduler_state.reserved_kv_tokens == 0
         && after.request_count == 0
@@ -791,6 +798,16 @@ void writeCase(std::ostream& output, CaseEvidence const& value)
             << ",\"output_tokens\":" << run.output_tokens
             << ",\"model_forward_tokens\":" << run.model_forward_tokens
             << ",\"model_forward_batches\":" << run.model_forward_batches
+            << ",\"batched_attention_submissions\":"
+            << run.batched_attention_submissions
+            << ",\"batched_attention_lanes\":"
+            << run.batched_attention_lanes
+            << ",\"average_attention_batch_size\":"
+            << (run.batched_attention_submissions == 0 ? 0.0
+                : static_cast<double>(run.batched_attention_lanes)
+                    / static_cast<double>(
+                        run.batched_attention_submissions
+                    ))
             << ",\"average_batch_size\":"
             << (run.model_forward_batches == 0 ? 0.0
                 : static_cast<double>(run.model_forward_tokens)

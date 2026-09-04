@@ -75,6 +75,10 @@ struct CudaEngineTransaction::Impl final {
 
     ~Impl();
     [[nodiscard]] CudaStatus failSubmission(cudaError_t error) noexcept;
+    [[nodiscard]] CudaStatus prepareAttention(
+        PagedDecodeRequest const& request,
+        DevicePagedDecodeBatchItem& item
+    ) noexcept;
     [[nodiscard]] CudaStatus complete() noexcept;
 };
 

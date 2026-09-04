@@ -297,6 +297,182 @@ __global__ void pagedAttentionOutputKernel(
     }
 }
 
+__global__ void pagedAttentionScoresBatchKernel(
+    ::kimkvcache::DevicePagedDecodeBatchItem const* items,
+    KvScalar const* micro_pool,
+    std::size_t micro_page_elements,
+    KvScalar const* extent_pool,
+    std::size_t extent_page_elements,
+    std::uint32_t query_head_count,
+    DeviceLayout layout)
+{
+    extern __shared__ float reduction[];
+    ::kimkvcache::DevicePagedDecodeBatchItem const item = items[blockIdx.y];
+    if (item.device_descriptors == nullptr || item.descriptor_count == 0
+        || item.token_count == 0 || item.device_query == nullptr
+        || item.device_scores == nullptr) {
+        return;
+    }
+
+    std::uint32_t const query_head = blockIdx.x;
+    std::uint32_t const group_size = query_head_count / layout.heads;
+    std::uint32_t const kv_head = query_head / group_size;
+    std::size_t const query_base =
+        static_cast<std::size_t>(query_head) * layout.dimensions;
+
+    for (std::uint32_t token = 0; token < item.token_count; ++token) {
+        ::kimkvcache::DeviceBlockDescriptor const descriptor = findDescriptor(
+            item.device_descriptors, item.descriptor_count, token
+        );
+        KvScalar const* page = descriptorPage(
+            descriptor,
+            micro_pool,
+            micro_page_elements,
+            extent_pool,
+            extent_page_elements
+        );
+        std::uint32_t const page_token =
+            token - descriptor.logical_token_begin;
+        float partial = 0.0F;
+        for (std::uint32_t dimension = threadIdx.x;
+             dimension < layout.dimensions;
+             dimension += blockDim.x) {
+            __half const q = reinterpret_cast<__half const*>(
+                item.device_query
+            )[query_base + dimension];
+            __half const key = reinterpret_cast<__half const*>(page)[
+                tensorOffset(
+                    layout,
+                    item.layer,
+                    0,
+                    page_token,
+                    kv_head,
+                    dimension,
+                    descriptor.page_token_capacity
+                )
+            ];
+            partial += __half2float(q) * __half2float(key);
+        }
+        reduction[threadIdx.x] = partial;
+        __syncthreads();
+        for (unsigned int stride = blockDim.x / 2;
+             stride != 0;
+             stride /= 2) {
+            if (threadIdx.x < stride) {
+                reduction[threadIdx.x] += reduction[threadIdx.x + stride];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) {
+            item.device_scores[
+                static_cast<std::size_t>(query_head) * item.token_count
+                    + token
+            ] = reduction[0] * item.attention_scale;
+        }
+        __syncthreads();
+    }
+}
+
+__global__ void pagedAttentionOutputBatchKernel(
+    ::kimkvcache::DevicePagedDecodeBatchItem const* items,
+    KvScalar const* micro_pool,
+    std::size_t micro_page_elements,
+    KvScalar const* extent_pool,
+    std::size_t extent_page_elements,
+    std::uint32_t query_head_count,
+    DeviceLayout layout)
+{
+    extern __shared__ float reduction[];
+    ::kimkvcache::DevicePagedDecodeBatchItem const item = items[blockIdx.y];
+    if (item.device_descriptors == nullptr || item.descriptor_count == 0
+        || item.token_count == 0 || item.device_scores == nullptr
+        || item.device_output == nullptr) {
+        return;
+    }
+
+    std::uint32_t const query_head = blockIdx.x;
+    std::uint32_t const group_size = query_head_count / layout.heads;
+    std::uint32_t const kv_head = query_head / group_size;
+    float const* head_scores = item.device_scores
+        + static_cast<std::size_t>(query_head) * item.token_count;
+
+    float local_maximum = -FLT_MAX;
+    for (std::uint32_t token = threadIdx.x;
+         token < item.token_count;
+         token += blockDim.x) {
+        local_maximum = fmaxf(local_maximum, head_scores[token]);
+    }
+    reduction[threadIdx.x] = local_maximum;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x / 2;
+         stride != 0;
+         stride /= 2) {
+        if (threadIdx.x < stride) {
+            reduction[threadIdx.x] = fmaxf(
+                reduction[threadIdx.x], reduction[threadIdx.x + stride]
+            );
+        }
+        __syncthreads();
+    }
+    float const maximum = reduction[0];
+    __syncthreads();
+    float local_sum = 0.0F;
+    for (std::uint32_t token = threadIdx.x;
+         token < item.token_count;
+         token += blockDim.x) {
+        local_sum += expf(head_scores[token] - maximum);
+    }
+    reduction[threadIdx.x] = local_sum;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x / 2;
+         stride != 0;
+         stride /= 2) {
+        if (threadIdx.x < stride) {
+            reduction[threadIdx.x] += reduction[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    float const denominator = reduction[0];
+
+    for (std::uint32_t dimension = threadIdx.x;
+         dimension < layout.dimensions;
+         dimension += blockDim.x) {
+        float weighted_value = 0.0F;
+        for (std::uint32_t token = 0; token < item.token_count; ++token) {
+            ::kimkvcache::DeviceBlockDescriptor const descriptor =
+                findDescriptor(
+                    item.device_descriptors, item.descriptor_count, token
+                );
+            KvScalar const* page = descriptorPage(
+                descriptor,
+                micro_pool,
+                micro_page_elements,
+                extent_pool,
+                extent_page_elements
+            );
+            std::uint32_t const page_token =
+                token - descriptor.logical_token_begin;
+            __half const value = reinterpret_cast<__half const*>(page)[
+                tensorOffset(
+                    layout,
+                    item.layer,
+                    1,
+                    page_token,
+                    kv_head,
+                    dimension,
+                    descriptor.page_token_capacity
+                )
+            ];
+            weighted_value += expf(head_scores[token] - maximum)
+                * __half2float(value);
+        }
+        reinterpret_cast<__half*>(item.device_output)[
+            static_cast<std::size_t>(query_head) * layout.dimensions
+                + dimension
+        ] = __float2half(weighted_value / denominator);
+    }
+}
+
 [[nodiscard]] dim3 gridFor(std::size_t element_count) noexcept
 {
     std::size_t const blocks =
@@ -401,6 +577,41 @@ void launchPagedDecodeAttention(
         query_head_count,
         scores,
         output,
+        layout
+    );
+}
+
+void launchPagedDecodeAttentionBatch(
+    ::kimkvcache::DevicePagedDecodeBatchItem const* items,
+    std::uint32_t item_count,
+    KvScalar const* micro_pool,
+    std::size_t micro_page_elements,
+    KvScalar const* extent_pool,
+    std::size_t extent_page_elements,
+    std::uint32_t query_head_count,
+    DeviceLayout layout,
+    cudaStream_t stream)
+{
+    std::size_t const shared_bytes = kThreadsPerBlock * sizeof(float);
+    dim3 const grid(query_head_count, item_count);
+    pagedAttentionScoresBatchKernel<<<
+        grid, kThreadsPerBlock, shared_bytes, stream>>>(
+        items,
+        micro_pool,
+        micro_page_elements,
+        extent_pool,
+        extent_page_elements,
+        query_head_count,
+        layout
+    );
+    pagedAttentionOutputBatchKernel<<<
+        grid, kThreadsPerBlock, shared_bytes, stream>>>(
+        items,
+        micro_pool,
+        micro_page_elements,
+        extent_pool,
+        extent_page_elements,
+        query_head_count,
         layout
     );
 }

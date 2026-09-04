@@ -103,12 +103,19 @@ bool makeWorkspaceLayout(
         static_cast<std::size_t>(config.attention_head_count)
         * config.max_position_embeddings * sizeof(float);
     std::size_t token_id_bytes = sizeof(std::uint32_t);
+    std::size_t attention_batch_item_bytes =
+        sizeof(DevicePagedDecodeBatchItem);
     bool const scaled = multiply(hidden_bytes, max_batch_size, hidden_bytes)
         && multiply(kv_bytes, max_batch_size, kv_bytes)
         && multiply(intermediate_bytes, max_batch_size, intermediate_bytes)
         && multiply(logits_bytes, max_batch_size, logits_bytes)
         && multiply(score_bytes, max_batch_size, score_bytes)
-        && multiply(token_id_bytes, max_batch_size, token_id_bytes);
+        && multiply(token_id_bytes, max_batch_size, token_id_bytes)
+        && multiply(
+            attention_batch_item_bytes,
+            max_batch_size,
+            attention_batch_item_bytes
+        );
     bool const valid = scaled
         && addRegion(token_id_bytes, cursor, layout.token_ids)
         && addRegion(token_id_bytes, cursor, layout.positions)
@@ -124,7 +131,12 @@ bool makeWorkspaceLayout(
         && addRegion(intermediate_bytes, cursor, layout.activated)
         && addRegion(logits_bytes, cursor, layout.logits)
         && addRegion(token_id_bytes, cursor, layout.greedy_token)
-        && addRegion(score_bytes, cursor, layout.attention_scores);
+        && addRegion(score_bytes, cursor, layout.attention_scores)
+        && addRegion(
+            attention_batch_item_bytes,
+            cursor,
+            layout.attention_batch_items
+        );
     if (valid) {
         layout.bytes = aligned(cursor);
     }

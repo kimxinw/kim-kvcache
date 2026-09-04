@@ -130,4 +130,16 @@ void launchPagedDecodeAttention(
     cudaStream_t stream
 );
 
+void launchPagedDecodeAttentionBatch(
+    ::kimkvcache::DevicePagedDecodeBatchItem const* items,
+    std::uint32_t item_count,
+    KvScalar const* micro_pool,
+    std::size_t micro_page_elements,
+    KvScalar const* extent_pool,
+    std::size_t extent_page_elements,
+    std::uint32_t query_head_count,
+    DeviceLayout layout,
+    cudaStream_t stream
+);
+
 } // namespace kimkvcache::cuda_detail

@@ -119,6 +119,12 @@ def write_summary_csv(root: Path, reports: dict[str, dict[str, Any]]) -> None:
         "requests_per_second",
         "output_tokens_per_second",
         "goodput_requests_per_second",
+        "model_forward_tokens",
+        "model_forward_batches",
+        "average_model_batch_size",
+        "batched_attention_submissions",
+        "batched_attention_lanes",
+        "average_attention_batch_size",
         "peak_committed_tokens",
         "peak_reserved_tokens",
         "peak_fragmentation_tokens",
@@ -143,6 +149,19 @@ def write_summary_csv(root: Path, reports: dict[str, dict[str, Any]]) -> None:
                 summary = case["summary"]
                 resources = case["resources"]
                 runs = case["runs"]
+                model_forward_tokens = sum(
+                    run.get("model_forward_tokens", 0) for run in runs
+                )
+                model_forward_batches = sum(
+                    run.get("model_forward_batches", 0) for run in runs
+                )
+                attention_submissions = sum(
+                    run.get("batched_attention_submissions", 0)
+                    for run in runs
+                )
+                attention_lanes = sum(
+                    run.get("batched_attention_lanes", 0) for run in runs
+                )
                 writer.writerow(
                     {
                         "variant": variant,
@@ -161,6 +180,20 @@ def write_summary_csv(root: Path, reports: dict[str, dict[str, Any]]) -> None:
                         "goodput_requests_per_second": summary[
                             "goodput_requests_per_second"
                         ],
+                        "model_forward_tokens": model_forward_tokens,
+                        "model_forward_batches": model_forward_batches,
+                        "average_model_batch_size": (
+                            model_forward_tokens / model_forward_batches
+                            if model_forward_batches
+                            else 0.0
+                        ),
+                        "batched_attention_submissions": attention_submissions,
+                        "batched_attention_lanes": attention_lanes,
+                        "average_attention_batch_size": (
+                            attention_lanes / attention_submissions
+                            if attention_submissions
+                            else 0.0
+                        ),
                         **resources,
                         "loaded_gpu_bytes": reports[variant]["config"][
                             "loaded_gpu_bytes"
@@ -213,6 +246,11 @@ def write_report(
         "hetero_vs_fixed_8": comparisons,
         "hetero_secondary_allocations": hetero_secondary_allocations,
         "engine_promotion_active": hetero_secondary_allocations > 0,
+        "batched_attention_active": any(
+            run.get("batched_attention_submissions", 0) > 0
+            for case in reports["hetero_8_64"]["cases"]
+            for run in case["runs"]
+        ),
     }
     (root / "comparison.json").write_text(
         json.dumps(analysis, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -265,6 +303,37 @@ def write_report(
     lines.extend(
         [
             "",
+            "## Batch 执行证据",
+            "",
+            "| Workload | Model Batch Size | Attention Batch Size | Attention Submissions/Run |",
+            "|---|---:|---:|---:|",
+        ]
+    )
+    for name in (
+        "decode_short_c1",
+        "decode_short_c2",
+        "decode_short_c4",
+        "decode_long_prompt_c4",
+        "mixed_c4",
+    ):
+        runs = hetero[name]["runs"]
+        model_tokens = sum(run.get("model_forward_tokens", 0) for run in runs)
+        model_batches = sum(run.get("model_forward_batches", 0) for run in runs)
+        attention_submissions = sum(
+            run.get("batched_attention_submissions", 0) for run in runs
+        )
+        attention_lanes = sum(
+            run.get("batched_attention_lanes", 0) for run in runs
+        )
+        lines.append(
+            f"| {name} | "
+            f"{model_tokens / model_batches if model_batches else 0.0:.2f} | "
+            f"{attention_lanes / attention_submissions if attention_submissions else 0.0:.2f} | "
+            f"{attention_submissions / len(runs):.0f} |"
+        )
+    lines.extend(
+        [
+            "",
             "## Capacity 与故障隔离",
             "",
             "| Variant | Capacity 完成/失败/拒绝 | Fault 完成/失败 | Peak fragmentation tokens |",
@@ -290,7 +359,7 @@ def write_report(
             "## 边界说明",
             "",
             f"- Hetero 的 Extent Page 分配次数为 `{hetero_secondary_allocations}`。当前 Engine Generation 路径没有自动 Promotion，因此 Hetero-8/64 在这些 E2E Workload 中实际主要走 Micro-8。",
-            "- 当前 Iteration Scheduler 在共享 CUDA Stream 上逐请求推进，并未使用融合 Batched GEMM/Attention；并发提高主要增加排队延迟，不代表 GPU Batch 加速。",
+            "- Dense GEMM 与 Paged Decode Attention 已按动态 Batch 执行；KV Write 仍按 Lane 提交，Chunked Prefill 仍是调度级因果 Wave，不是融合的多 Token Prefill Attention。",
             "- Microbenchmark 与本报告的 E2E 结果分开；K6 的 Gather/Promotion 收益不能直接替代模型端到端收益。",
             "- Nsight Systems GPU Activity Timeline 受当前 WSL2/CUPTI 环境限制，本报告不以 CUDA API Duration 冒充 Kernel Timeline。",
             "- 未与 vLLM 或 TensorRT-LLM 比较峰值性能。",

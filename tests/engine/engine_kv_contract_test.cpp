@@ -36,6 +36,7 @@ struct TransactionTrace final {
     EngineKvError commit_failure{EngineKvError::None};
     std::uint32_t failure_layer{0};
     std::uint32_t rollback_count{0};
+    std::uint32_t attention_batch_count{0};
     EngineStream expected_stream{nullptr};
 };
 
@@ -73,6 +74,12 @@ public:
             return EngineKvStatus{trace_->attention_failure};
         }
         return {};
+    }
+
+    void attendLayerBatch(PagedDecodeBatch& batch) override
+    {
+        ++trace_->attention_batch_count;
+        TokenTransactionBackend::attendLayerBatch(batch);
     }
 
     [[nodiscard]] EngineKvStatus commit(
@@ -294,6 +301,54 @@ void testArgumentValidationDoesNotSubmit()
     expect(transaction.rollback().ok(), "explicit Rollback must succeed");
 }
 
+void testBatchedAttentionAdvancesAndFailsLanesIndependently()
+{
+    int stream_token = 0;
+    auto healthy_trace = std::make_shared<TransactionTrace>();
+    auto failed_trace = std::make_shared<TransactionTrace>();
+    healthy_trace->expected_stream = &stream_token;
+    failed_trace->expected_stream = &stream_token;
+    failed_trace->attention_failure = EngineKvError::SubmissionFailed;
+    failed_trace->failure_layer = 0;
+
+    TokenTransaction healthy = makeTransaction(healthy_trace, 1, 20);
+    TokenTransaction failed = makeTransaction(failed_trace, 1, 21);
+    DeviceInputs healthy_inputs;
+    DeviceInputs failed_inputs;
+    expect(healthy.writeLayer(makeWrite(healthy_inputs, 0)).ok(),
+        "healthy batch lane writes its KV");
+    expect(failed.writeLayer(makeWrite(failed_inputs, 0)).ok(),
+        "failing batch lane writes its KV");
+
+    std::array<PagedDecodeBatchItem, 2> items{{
+        {&healthy, makeAttention(healthy_inputs, 0)},
+        {&failed, makeAttention(failed_inputs, 0)},
+    }};
+    std::array<DevicePagedDecodeBatchItem, 2> host_items{};
+    std::array<DevicePagedDecodeBatchItem, 2> device_items{};
+    PagedDecodeBatch batch{
+        items.data(),
+        items.size(),
+        host_items.data(),
+        device_items.data(),
+        host_items.size(),
+    };
+    attendLayerBatch(batch);
+
+    expect(items[0].status.ok(), "healthy batch lane succeeds");
+    expect(items[1].status.error == EngineKvError::SubmissionFailed,
+        "failed batch lane reports its own backend error");
+    expect(healthy.snapshot().phase == TokenTransactionPhase::ReadyToCommit,
+        "healthy batch lane advances to commit-ready");
+    expect(failed.snapshot().phase == TokenTransactionPhase::Failed,
+        "failed batch lane becomes fail-closed");
+    expect(healthy_trace->attention_batch_count == 1
+            && failed_trace->attention_batch_count == 0,
+        "one backend dispatch coordinates the batch");
+    expect(healthy.commit().ok(), "healthy batch lane commits independently");
+    expect(failed.rollback().ok(), "failed batch lane rolls back independently");
+}
+
 void testDestructorAndMoveOwnership()
 {
     auto invalid_trace = std::make_shared<TransactionTrace>();
@@ -510,6 +565,7 @@ int main()
     testConfigurationAndDescriptorContract();
     testNormalLayerSequenceAndCommit();
     testArgumentValidationDoesNotSubmit();
+    testBatchedAttentionAdvancesAndFailsLanesIndependently();
     testDestructorAndMoveOwnership();
     testSubmissionAndCommitFailuresRollback();
     testFixedAndHeterogeneousShareOneInterface();
