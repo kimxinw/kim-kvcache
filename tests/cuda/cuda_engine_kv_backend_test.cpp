@@ -50,10 +50,15 @@ struct DeviceBuffers final {
     KvScalar* output{nullptr};
     void* workspace{nullptr};
     cudaStream_t stream{nullptr};
+    bool owns_stream{true};
 
-    DeviceBuffers()
+    explicit DeviceBuffers(cudaStream_t shared_stream = nullptr)
+        : stream(shared_stream)
+        , owns_stream(shared_stream == nullptr)
     {
-        expect(cudaStreamCreate(&stream) == cudaSuccess, "create stream");
+        if (owns_stream) {
+            expect(cudaStreamCreate(&stream) == cudaSuccess, "create stream");
+        }
         expect(cudaMalloc(reinterpret_cast<void**>(&key), 4) == cudaSuccess,
             "allocate key");
         expect(cudaMalloc(reinterpret_cast<void**>(&value), 4) == cudaSuccess,
@@ -68,13 +73,17 @@ struct DeviceBuffers final {
 
     ~DeviceBuffers()
     {
-        static_cast<void>(cudaStreamSynchronize(stream));
+        if (owns_stream) {
+            static_cast<void>(cudaStreamSynchronize(stream));
+        }
         static_cast<void>(cudaFree(workspace));
         static_cast<void>(cudaFree(output));
         static_cast<void>(cudaFree(query));
         static_cast<void>(cudaFree(value));
         static_cast<void>(cudaFree(key));
-        static_cast<void>(cudaStreamDestroy(stream));
+        if (owns_stream) {
+            static_cast<void>(cudaStreamDestroy(stream));
+        }
     }
 };
 
@@ -482,6 +491,118 @@ void testExtentPagedAttention()
     static_cast<void>(cudaFree(device_input));
 }
 
+void testBatchedAttentionFailureIsolation(EngineKvBackendKind kind)
+{
+    EngineKvConfig const config{KvLayout{1, 1, 2}, 2, 4096};
+    std::unique_ptr<EngineKvBackend> backend =
+        kind == EngineKvBackendKind::Heterogeneous
+        ? createHeterogeneousCudaEngineKvBackend(config, 16, 2)
+        : createFixedCudaEngineKvBackend(config, 8, 16);
+    expect(backend != nullptr, "create batch isolation backend");
+    expect(backend->createRequest(70).ok(), "create failing batch request");
+    expect(backend->createRequest(71).ok(), "create healthy batch request");
+
+    cudaStream_t stream = nullptr;
+    expect(cudaStreamCreate(&stream) == cudaSuccess,
+        "create shared batch stream");
+    DeviceBuffers first(stream);
+    DeviceBuffers second(stream);
+    TokenReserveResult first_reserved = backend->reserveToken({
+        70, 0, reinterpret_cast<EngineStream>(stream),
+    });
+    TokenReserveResult second_reserved = backend->reserveToken({
+        71, 0, reinterpret_cast<EngineStream>(stream),
+    });
+    expect(first_reserved.ok() && second_reserved.ok(),
+        "reserve two independent batch lanes");
+
+    std::vector<KvScalar> const query{
+        fp16(0.5F), fp16(0.25F), fp16(-0.2F), fp16(0.4F),
+    };
+    std::vector<KvScalar> const first_key{fp16(0.1F), fp16(0.2F)};
+    std::vector<KvScalar> const first_value{fp16(1.0F), fp16(2.0F)};
+    std::vector<KvScalar> const second_key{fp16(0.3F), fp16(0.4F)};
+    std::vector<KvScalar> const second_value{fp16(3.0F), fp16(4.0F)};
+    auto upload = [&](DeviceBuffers& device,
+                      std::vector<KvScalar> const& key,
+                      std::vector<KvScalar> const& value) {
+        expect(cudaMemcpyAsync(
+            device.query, query.data(), 8, cudaMemcpyHostToDevice, stream
+        ) == cudaSuccess, "upload batch query");
+        expect(cudaMemcpyAsync(
+            device.key, key.data(), 4, cudaMemcpyHostToDevice, stream
+        ) == cudaSuccess, "upload batch key");
+        expect(cudaMemcpyAsync(
+            device.value, value.data(), 4, cudaMemcpyHostToDevice, stream
+        ) == cudaSuccess, "upload batch value");
+    };
+    upload(first, first_key, first_value);
+    upload(second, second_key, second_value);
+    expect(first_reserved.transaction.writeLayer(
+            {0, first.key, first.value}).ok(),
+        "write failing batch lane before attention");
+    expect(second_reserved.transaction.writeLayer(
+            {0, second.key, second.value}).ok(),
+        "write healthy batch lane before attention");
+
+    expect(injectCudaEngineFailureOnce(
+        *backend, CudaFailurePoint::Submission),
+        "inject one batch attention submission failure");
+    std::array<PagedDecodeBatchItem, 2> items{{
+        {&first_reserved.transaction,
+            {0, first.query, first.output, first.workspace, 4096,
+                1.0F / std::sqrt(2.0F)}},
+        {&second_reserved.transaction,
+            {0, second.query, second.output, second.workspace, 4096,
+                1.0F / std::sqrt(2.0F)}},
+    }};
+    std::array<DevicePagedDecodeBatchItem, 2> host_items{};
+    DevicePagedDecodeBatchItem* device_items = nullptr;
+    expect(cudaMalloc(
+        reinterpret_cast<void**>(&device_items),
+        sizeof(DevicePagedDecodeBatchItem) * items.size()
+    ) == cudaSuccess, "allocate batch lane metadata");
+    PagedDecodeBatch batch{
+        items.data(),
+        items.size(),
+        host_items.data(),
+        device_items,
+        host_items.size(),
+    };
+    attendLayerBatch(batch);
+    expect(items[0].status.error == EngineKvError::SubmissionFailed,
+        "injected batch lane fails closed");
+    expect(items[1].status.ok(),
+        "healthy batch lane survives another lane failure");
+    expect(first_reserved.transaction.rollback().ok(),
+        "failed batch lane rolls back");
+    expect(second_reserved.transaction.commit().ok(),
+        "healthy batch lane commits");
+
+    std::array<KvScalar, 4> output{};
+    expect(cudaMemcpy(
+        output.data(), second.output, 8, cudaMemcpyDeviceToHost
+    ) == cudaSuccess, "download healthy batch output");
+    expect(std::abs(fp32(output[0]) - 3.0F) < 0.01F
+            && std::abs(fp32(output[1]) - 4.0F) < 0.01F
+            && std::abs(fp32(output[2]) - 3.0F) < 0.01F
+            && std::abs(fp32(output[3]) - 4.0F) < 0.01F,
+        "healthy batch lane computes its independent GQA output");
+    EngineKvBackendSnapshot const snapshot = backend->snapshot();
+    expect(snapshot.committed_token_count == 1
+            && snapshot.active_transaction_count == 0,
+        "batch failure publishes only the healthy lane");
+    expect(snapshot.batched_attention_submissions == 1
+            && snapshot.batched_attention_lanes == 1,
+        "batch telemetry records the surviving submitted lane");
+    expect(backend->releaseRequest(71).ok(), "release healthy batch request");
+    expect(backend->releaseRequest(70).ok(), "release failed batch request");
+    expect(backend->checkInvariants(), "batch failure isolation invariants");
+
+    static_cast<void>(cudaFree(device_items));
+    static_cast<void>(cudaStreamDestroy(stream));
+}
+
 } // namespace
 
 int main()
@@ -491,6 +612,10 @@ int main()
         testBackend(EngineKvBackendKind::Fixed, page_tokens);
     }
     testExtentPagedAttention();
+    testBatchedAttentionFailureIsolation(
+        EngineKvBackendKind::Heterogeneous
+    );
+    testBatchedAttentionFailureIsolation(EngineKvBackendKind::Fixed);
     if (failures != 0) {
         std::cerr << failures << " CUDA engine KV checks failed\n";
         return 1;

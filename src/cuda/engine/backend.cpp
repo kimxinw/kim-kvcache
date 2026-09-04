@@ -4,6 +4,8 @@
 #include "kim-kv/fixed/fixed_page_manager.h"
 #include "kim-kv/runtime/kv_cache_manager.h"
 
+#include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -70,6 +72,8 @@ struct EngineBackendState final {
     CudaKvStorage storage;
     std::unordered_map<RequestId, std::uint32_t> committed_lengths{};
     std::uint64_t active_transactions{0};
+    std::atomic<std::uint64_t> batched_attention_submissions{0};
+    std::atomic<std::uint64_t> batched_attention_lanes{0};
     mutable std::mutex mutex{};
 
     EngineBackendState(
@@ -189,6 +193,69 @@ public:
         EngineStream) override
     {
         return mapCuda(io_->attendLayer(request));
+    }
+
+    void attendLayerBatch(PagedDecodeBatch& batch) override
+    {
+        constexpr std::size_t kStackBatchCapacity = 64;
+        std::array<CudaEngineTransaction::AttentionBatchItem,
+            kStackBatchCapacity> cuda_items{};
+        std::size_t cuda_count = 0;
+        EngineStream common_stream = nullptr;
+
+        for (std::size_t index = 0; index < batch.item_count; ++index) {
+            PagedDecodeBatchItem const& item = batch.items[index];
+            if (!item.status.ok()) {
+                continue;
+            }
+            auto* const backend = dynamic_cast<CudaTokenTransactionBackend*>(
+                batchBackend(item)
+            );
+            EngineStream const stream = batchStream(item);
+            if (backend == nullptr || backend->owner_.get() != owner_.get()
+                || (cuda_count != 0 && stream != common_stream)
+                || cuda_count == kStackBatchCapacity) {
+                TokenTransactionBackend::attendLayerBatch(batch);
+                return;
+            }
+            if (cuda_count == 0) {
+                common_stream = stream;
+            }
+            cuda_items[cuda_count++] = {
+                backend->io_.get(), item.request, {},
+            };
+        }
+        if (cuda_count < 2) {
+            TokenTransactionBackend::attendLayerBatch(batch);
+            return;
+        }
+
+        CudaEngineTransaction::attendLayerBatch(
+            cuda_items.data(),
+            cuda_count,
+            batch.host_items,
+            batch.device_items,
+            batch.item_capacity
+        );
+
+        std::size_t cuda_index = 0;
+        std::uint64_t successful_lanes = 0;
+        for (std::size_t index = 0; index < batch.item_count; ++index) {
+            PagedDecodeBatchItem& item = batch.items[index];
+            if (!item.status.ok()) {
+                continue;
+            }
+            item.status = mapCuda(cuda_items[cuda_index++].status);
+            successful_lanes += item.status.ok() ? 1U : 0U;
+        }
+        if (successful_lanes != 0) {
+            owner_->batched_attention_submissions.fetch_add(
+                1, std::memory_order_relaxed
+            );
+            owner_->batched_attention_lanes.fetch_add(
+                successful_lanes, std::memory_order_relaxed
+            );
+        }
     }
 
     [[nodiscard]] EngineKvStatus commit(EngineStream) override
@@ -426,6 +493,12 @@ public:
         result.request_count = state_->committed_lengths.size();
         result.active_transaction_count = state_->active_transactions;
         result.committed_token_count = committed;
+        result.batched_attention_submissions =
+            state_->batched_attention_submissions.load(
+                std::memory_order_relaxed
+            );
+        result.batched_attention_lanes =
+            state_->batched_attention_lanes.load(std::memory_order_relaxed);
         CudaStorageSnapshot const storage = state_->storage.snapshot();
         result.storage_reserved_bytes = storage.totalReservedBytes();
         if (state_->heterogeneous != nullptr) {

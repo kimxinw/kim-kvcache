@@ -155,6 +155,52 @@ struct PagedDecodeRequest final {
     float attention_scale{0.0F};
 };
 
+class TokenTransaction;
+
+// One lane of a ragged paged-attention launch. The caller owns the transaction
+// and all query/output/workspace storage. status is populated independently so
+// one rejected or failed lane does not prevent healthy lanes from advancing.
+struct PagedDecodeBatchItem final {
+    TokenTransaction* transaction{nullptr};
+    PagedDecodeRequest request{};
+    EngineKvStatus status{EngineKvError::InvalidState};
+    bool dispatched{false};
+};
+
+// Device-side lane metadata uploaded once per layer. Every lane may reference
+// an independent block table, token count, query, score workspace, and output.
+struct DevicePagedDecodeBatchItem final {
+    DeviceBlockDescriptor const* device_descriptors{nullptr};
+    std::uint32_t descriptor_count{0};
+    std::uint32_t token_count{0};
+    std::uint32_t layer{0};
+    KvScalar const* device_query{nullptr};
+    float* device_scores{nullptr};
+    KvScalar* device_output{nullptr};
+    float attention_scale{0.0F};
+};
+
+static_assert(
+    std::is_trivially_copyable_v<DevicePagedDecodeBatchItem>,
+    "DevicePagedDecodeBatchItem must remain trivially copyable"
+);
+
+static_assert(
+    std::is_standard_layout_v<DevicePagedDecodeBatchItem>,
+    "DevicePagedDecodeBatchItem must remain standard-layout"
+);
+
+// host_items and device_items are caller-owned, preallocated scratch with at
+// least item_capacity entries. CUDA backends use them to avoid per-layer
+// allocation; non-CUDA backends may ignore the scratch and use scalar fallback.
+struct PagedDecodeBatch final {
+    PagedDecodeBatchItem* items{nullptr};
+    std::size_t item_count{0};
+    DevicePagedDecodeBatchItem* host_items{nullptr};
+    DevicePagedDecodeBatchItem* device_items{nullptr};
+    std::size_t item_capacity{0};
+};
+
 struct ReserveTokenRequest final {
     RequestId request_id{kInvalidRequestId};
     std::uint32_t expected_committed_tokens{0};
@@ -223,6 +269,11 @@ public:
         EngineStream stream
     ) = 0;
 
+    // The default implementation preserves compatibility by submitting every
+    // valid lane independently. CUDA backends override this with one ragged
+    // batch launch when all participating transactions share storage/stream.
+    virtual void attendLayerBatch(PagedDecodeBatch& batch);
+
     [[nodiscard]] virtual EngineKvStatus commit(
         EngineStream stream
     ) = 0;
@@ -231,6 +282,14 @@ public:
 
 protected:
     TokenTransactionBackend() = default;
+
+    [[nodiscard]] static TokenTransactionBackend* batchBackend(
+        PagedDecodeBatchItem const& item
+    ) noexcept;
+
+    [[nodiscard]] static EngineStream batchStream(
+        PagedDecodeBatchItem const& item
+    ) noexcept;
 };
 
 // 一个 Token 的 move-only RAII 事务。正常顺序固定为每层
@@ -286,7 +345,14 @@ private:
     std::uint32_t next_layer_{0};
     TokenTransactionPhase phase_{TokenTransactionPhase::Empty};
     EngineStream stream_{nullptr};
+
+    friend class TokenTransactionBackend;
+    friend void attendLayerBatch(PagedDecodeBatch& batch);
 };
+
+// Validates every lane against the scalar TokenTransaction state machine,
+// dispatches the backend batch operation, then advances/fails lanes separately.
+void attendLayerBatch(PagedDecodeBatch& batch);
 
 struct TokenReserveResult final {
     EngineKvStatus status{};
@@ -307,6 +373,8 @@ struct EngineKvBackendSnapshot final {
     std::uint64_t request_count{0};
     std::uint64_t active_transaction_count{0};
     std::uint64_t committed_token_count{0};
+    std::uint64_t batched_attention_submissions{0};
+    std::uint64_t batched_attention_lanes{0};
     // Policy-neutral page telemetry. Fixed backends only populate primary;
     // Heterogeneous backends expose Micro as primary and Extent as secondary.
     std::uint16_t primary_page_tokens{0};

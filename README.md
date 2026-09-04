@@ -1,73 +1,67 @@
 # kim-kvcache
 
-基于 C++/CUDA 的最小 LLM 推理运行时。项目以异构 Paged KV Cache 为核心，完成
-TinyLlama 1.1B FP16 的逐 Token 前向、Greedy Generation、Iteration Scheduler 和
-资源生命周期管理。
+基于 C++/CUDA 的单 GPU LLM 推理运行时，以异构 Paged KV Cache 为核心，支持
+TinyLlama 1.1B FP16、动态 Batched Forward、Chunked Prefill 和 Greedy Generation。
 
 ```mermaid
 graph LR
-    A[Token IDs] --> B[Iteration Scheduler]
-    B --> C[Generation Step]
-    C --> D[TinyLlama ModelRunner]
-    D --> E[KV Transaction]
-    E --> F[8-Token Micro Page]
-    E --> G[64-Token Extent Page]
-    F --> H[Paged Decode Attention]
-    G --> H
-    H --> B
+    A[Requests] --> B[Iteration Scheduler]
+    B --> C[Batched Model Forward]
+    C --> D[Paged KV Transaction]
+    D --> E[8-Token Micro Page]
+    D --> F[64-Token Extent Page]
+    E --> G[Paged Attention]
+    F --> G
+    G --> B
 ```
 
-## 特性
+## 核心能力
 
-### 1. 异构 Paged KV Cache
+### 异构 Paged KV Cache
 
-使用 8-Token Micro Page 保存活跃尾部和分叉位置，将稳定历史事务式合并为
-64-Token Extent Page。支持前缀共享、Partial-Tail COW、Page Lease 和
-Fixed-8/16/32/64 对照实现。
+`src/runtime`、`src/cuda/kv`
 
-### 2. Engine KV 与模型执行
+- 8-Token Micro Page + 64-Token Extent Page
+- Prefix Fork、Partial-Tail COW、Promotion、Page Lease
+- Fixed-8/16/32/64 对照实现
+- Token 级事务：全部 Decoder Layer 成功后提交，失败自动回滚
 
-`EngineKvBackend` 和 move-only `TokenTransaction` 强制每层
-`Write -> Attend`，全部层成功后才提交 Token，失败时回滚。Paged Decode Attention
-直接读取 Micro/Extent Page，支持 GQA，并复用预分配 Workspace。
+### CUDA Model Runner
 
-TinyLlama ModelRunner 使用 FP16 权重、cuBLAS GEMM 和 CUDA 算子实现完整 Decoder、
-LM Head 与 Greedy Argmax。权重 Manifest 记录 Shape、Offset 和逐 Tensor SHA-256。
+`src/cuda/model`、`src/cuda/attention`
 
-### 3. Generation Loop 与 Iteration Scheduler
+- TinyLlama FP16 Decoder、LM Head、Greedy Argmax
+- cuBLAS GEMM，Dense 算子支持动态 `batch_size`
+- Paged Decode Attention、GQA、预分配 Workspace
+- Manifest 校验 Shape、Offset 和逐 Tensor SHA-256
 
-支持预 Token 化输入、`max_new_tokens`、EOS、取消和 Runtime Stop，完成
-`Prefill -> Decode -> Terminal`。每个请求返回唯一终态、Usage、TTFT、TPOT 和 E2E，
-退出后统一回收 KV 资源。
+### Iteration Scheduler
 
-`IterationSchedulerRuntime` 使用 FIFO 轮转在 Token 边界动态加入和退出请求，支持
-`c1/c2/c4`、请求取消、跨请求失败隔离、Stop 排空，以及活动请求、每轮 Token 和 KV
-Token 三类预算。Scheduler 将同一 Wave 的独立序列位置组成动态 Batch，Dense Linear 使用
-`N=batch_size` 的 cuBLAS GEMM；Prefill 按可配置 Chunk 推进，并可与 Decode 请求混合组批。
-每个请求仍保留独立 KV Transaction，单个 Lane 失败不会提交半写 KV。
+`src/engine`
 
-## 验证结果
+- FIFO 动态组批，支持请求加入、退出、取消和失败隔离
+- c1/c2/c4 Batched Forward，默认最大 Batch Size 为 8
+- Chunked Prefill 与 Decode 混合调度
+- 活跃请求、Batch Token 和 KV Token 三类预算
+- 输出 TTFT、TPOT、E2E 和 Batch 利用率
 
-测试环境：RTX 3060 12 GiB、CUDA 12.6.85、TinyLlama 1.1B Chat FP16。
+## 验证
 
-| 验证项 | 结果 |
+环境：RTX 3060 12 GiB、CUDA 12.6.85、TinyLlama 1.1B Chat FP16。
+
+| 项目 | 结果 |
 |---|---|
 | CPU / CUDA Release | `13/13 PASS` / `20/20 PASS` |
 | CPU ASan/UBSan | `12/12 PASS` |
-| CUDA Sanitizer | memcheck、racecheck、initcheck 均为 `0 errors` |
-| TinyLlama 数值 | Hidden/Logits 通过误差门禁，Top-10 `10/10` |
-| Generation | ISL32/128、OSL32 Token 与 Transformers FP16 全一致 |
-| Scheduler | CUDA 小模型 c1/c2/c4 Token 与独立 FP16 Reference 全一致 |
-| E5 端到端 | 五种 Page 策略完整 Token 一致；8 个唯一 Prompt 与 Transformers FP16 一致 |
-| E5 性能边界 | Hetero E2E p50 比 Fixed-8 慢 `6.16%～10.12%`，当前 Engine Extent 分配为 `0` |
-| 资源稳定性 | 真实模型连续 100 次结果一致，KV 归零，GPU 空闲显存差值 `0` |
-| Long Gather | Hetero 相比 Fixed-8 降低 `65.03%` |
-| 容量模型 | 相比 Fixed-64，碎片降低 `88.69%～91.63%` |
+| CUDA Sanitizer | memcheck、racecheck、initcheck：`0 errors` |
+| 模型正确性 | Hidden、Logits、Top-10 通过数值门禁 |
+| 端到端生成 | 8 个 Prompt 的完整 Token 与 Transformers FP16 一致 |
+| Batch | c2/c4 平均 Batch Size 分别为 `2` / `4` |
+| KV 收益 | Long Gather `-65.03%`；相对 Fixed-64 碎片 `-88.69%～-91.63%` |
 
-结果位于 `tests/reference` 和 `benchmarks/results`。K6 是独立 KV Data Path 证据；E5
-单独报告真实模型端到端结果，两者不能互相替代。
+测试与性能结果位于 `tests/reference` 和 `benchmarks/results`。
 
-## 构建与测试
+## 构建
 
 ```bash
 # CPU
@@ -76,14 +70,14 @@ cmake --build --preset cpu-release --parallel
 ctest --preset cpu-release
 
 # CUDA
-CUDACXX=/path/to/cuda/bin/nvcc cmake --preset cuda-release
+CUDACXX=/path/to/nvcc cmake --preset cuda-release
 cmake --build --preset cuda-release --parallel
 ctest --preset cuda-release
 ```
 
-## TinyLlama Generation
+## 运行
 
-权重可通过 `scripts/convert_tinyllama_weights.py` 从 Hugging Face 模型离线转换。
+先使用 `scripts/convert_tinyllama_weights.py` 转换权重：
 
 ```bash
 build-k5-cuda-release/tools/kim_kv_tinyllama_generate \
@@ -92,34 +86,25 @@ build-k5-cuda-release/tools/kim_kv_tinyllama_generate \
   --tokens 1,450,7483,310,3444,338 \
   --max-new-tokens 32 \
   --output /tmp/generation.json
-
-python scripts/validate_tinyllama_generation.py \
-  --manifest /path/to/model.manifest \
-  --weights /path/to/model.weights \
-  --runtime-json /tmp/generation.json \
-  --output /tmp/reference.json
 ```
 
-KV Benchmark 可通过 `scripts/run_k6_release_matrix.sh` 运行。
-
-E5 端到端 Fixed/Heterogeneous 公平矩阵通过以下命令运行：
+完整 KV 与端到端矩阵分别运行：
 
 ```bash
-KIM_KV_MODEL_MANIFEST=/path/to/model.manifest \
-KIM_KV_MODEL_WEIGHTS=/path/to/model.weights \
-KIM_KV_REFERENCE_PYTHON=/path/to/python-with-torch \
+scripts/run_k6_release_matrix.sh
 scripts/run_e5_end_to_end.sh
 ```
 
-## 当前范围
+## 当前边界
 
-当前实现为单 GPU、单模型、同步 Iteration Scheduler。Dense 算子已支持动态 Batch，
-`max_batched_tokens` 控制每轮全部 Batch Lane 的 Token 总预算，`prefill_chunk_size` 控制
-单请求每轮可推进的 Prompt 长度。Paged Attention 目前仍按 Lane 向共享 Stream 提交，
-Chunk 内同一请求的 Token 以因果顺序分 Wave 执行，尚未实现多 Token 融合 Prefill
-Attention 或 Batched Paged Attention Kernel。
+- 单 GPU、单模型、同步 Scheduler
+- Paged Attention 仍按 Batch Lane 提交
+- Chunk 内同一请求按因果 Wave 推进，尚无融合的多 Token Prefill Attention
 
 ## TODO
-- 在 Engine Generation 路径接入自动 Promotion，使 Extent Pool 参与端到端执行；
-- 融合 Batched Paged Attention 与多 Token Prefill Attention；
-- 接入 `kim-llm-serving` MiniEngine Backend。
+
+- 在 Generation 路径自动触发 Micro → Extent Promotion
+- 实现融合的 Batched Paged Attention Kernel
+- 实现真正的多 Token Chunked Prefill 与因果 Attention
+- 支持异步、多 Stream 调度
+- 接入 `kim-llm-serving` MiniEngine Backend

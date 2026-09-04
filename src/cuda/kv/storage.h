@@ -19,6 +19,12 @@ class CudaEngineTransaction final {
 public:
     struct Impl;
 
+    struct AttentionBatchItem final {
+        CudaEngineTransaction* transaction{nullptr};
+        PagedDecodeRequest request{};
+        CudaStatus status{CudaError::InvalidArgument, 0};
+    };
+
     ~CudaEngineTransaction();
     CudaEngineTransaction(CudaEngineTransaction const&) = delete;
     CudaEngineTransaction& operator=(CudaEngineTransaction const&) = delete;
@@ -31,6 +37,14 @@ public:
     ) noexcept;
     [[nodiscard]] CudaStatus attendLayer(
         PagedDecodeRequest const& request
+    ) noexcept;
+
+    static void attendLayerBatch(
+        AttentionBatchItem* items,
+        std::size_t item_count,
+        DevicePagedDecodeBatchItem* host_items,
+        DevicePagedDecodeBatchItem* device_items,
+        std::size_t item_capacity
     ) noexcept;
     [[nodiscard]] CudaStatus finish() noexcept;
 

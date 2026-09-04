@@ -85,6 +85,16 @@ CudaModelRunnerCreateResult createCudaTinyLlamaModelRunner(
     impl->backend = &kv_backend;
     impl->stream = reinterpret_cast<cudaStream_t>(stream);
     impl->max_batch_size = options.max_batch_size;
+    try {
+        impl->host_attention_batch_items.resize(impl->max_batch_size);
+    } catch (std::bad_alloc const&) {
+        result.status = failure(
+            CudaModelRunnerError::AllocationFailed,
+            0,
+            "batch attention host workspace allocation failed"
+        );
+        return result;
+    }
     if (!makeWorkspaceLayout(
             config, impl->max_batch_size, impl->workspace_layout)) {
         result.status = failure(

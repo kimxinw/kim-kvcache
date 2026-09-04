@@ -40,6 +40,47 @@ CudaStatus CudaEngineTransaction::Impl::failSubmission(
     return submission_status;
 }
 
+CudaStatus CudaEngineTransaction::Impl::prepareAttention(
+    PagedDecodeRequest const& request,
+    DevicePagedDecodeBatchItem& item) noexcept
+{
+    item = {};
+    if (finished || !submission_status.ok()
+        || request.layer >= storage->layout.layer_count
+        || request.device_query == nullptr
+        || request.device_output == nullptr
+        || request.device_workspace == nullptr
+        || !(request.attention_scale > 0.0F)) {
+        return !submission_status.ok() ? submission_status : invalidArgument();
+    }
+    std::uint32_t const token_count = reserved.tokenCount();
+    std::size_t const score_count =
+        static_cast<std::size_t>(query_head_count) * token_count;
+    if (token_count == 0
+        || score_count > std::numeric_limits<std::size_t>::max()
+            / sizeof(float)
+        || request.workspace_bytes < score_count * sizeof(float)) {
+        return invalidArgument();
+    }
+    if (storage->consumeFailure(CudaFailurePoint::Submission)) {
+        submission_status = injectedSubmissionFailure();
+        final_status = submission_status;
+        return submission_status;
+    }
+
+    item = DevicePagedDecodeBatchItem{
+        device_descriptors,
+        descriptor_count,
+        token_count,
+        request.layer,
+        request.device_query,
+        static_cast<float*>(request.device_workspace),
+        request.device_output,
+        request.attention_scale,
+    };
+    return {};
+}
+
 CudaStatus CudaEngineTransaction::Impl::complete() noexcept
 {
     if (finished) {
@@ -170,47 +211,29 @@ CudaStatus CudaEngineTransaction::writeLayer(
 CudaStatus CudaEngineTransaction::attendLayer(
     PagedDecodeRequest const& request) noexcept
 {
-    if (impl_ == nullptr
-        || impl_->finished
-        || !impl_->submission_status.ok()
-        || request.layer >= impl_->storage->layout.layer_count
-        || request.device_query == nullptr
-        || request.device_output == nullptr
-        || request.device_workspace == nullptr
-        || !(request.attention_scale > 0.0F)) {
-        return impl_ != nullptr && !impl_->submission_status.ok()
-            ? impl_->submission_status
-            : invalidArgument();
-    }
-    std::uint32_t const token_count = impl_->reserved.tokenCount();
-    std::size_t const score_count =
-        static_cast<std::size_t>(impl_->query_head_count) * token_count;
-    if (token_count == 0
-        || score_count > std::numeric_limits<std::size_t>::max()
-            / sizeof(float)
-        || request.workspace_bytes < score_count * sizeof(float)) {
+    if (impl_ == nullptr) {
         return invalidArgument();
     }
-    if (impl_->storage->consumeFailure(CudaFailurePoint::Submission)) {
-        impl_->submission_status = injectedSubmissionFailure();
-        impl_->final_status = impl_->submission_status;
-        return impl_->submission_status;
+    DevicePagedDecodeBatchItem item;
+    CudaStatus const prepared = impl_->prepareAttention(request, item);
+    if (!prepared.ok()) {
+        return prepared;
     }
 
     cuda_detail::launchPagedDecodeAttention(
-        impl_->device_descriptors,
-        impl_->descriptor_count,
+        item.device_descriptors,
+        item.descriptor_count,
         impl_->storage->micro_data,
         impl_->storage->micro_page_elements,
         impl_->storage->extent_data,
         impl_->storage->extent_page_elements,
-        token_count,
-        request.layer,
+        item.token_count,
+        item.layer,
         impl_->query_head_count,
-        request.device_query,
-        static_cast<float*>(request.device_workspace),
-        request.device_output,
-        request.attention_scale,
+        item.device_query,
+        item.device_scores,
+        item.device_output,
+        item.attention_scale,
         cuda_storage_detail::deviceLayout(impl_->storage->layout),
         impl_->stream
     );
@@ -218,6 +241,91 @@ CudaStatus CudaEngineTransaction::attendLayer(
     return error == cudaSuccess
         ? CudaStatus{}
         : impl_->failSubmission(error);
+}
+
+void CudaEngineTransaction::attendLayerBatch(
+    AttentionBatchItem* items,
+    std::size_t item_count,
+    DevicePagedDecodeBatchItem* host_items,
+    DevicePagedDecodeBatchItem* device_items,
+    std::size_t item_capacity) noexcept
+{
+    if (items == nullptr || item_count == 0 || host_items == nullptr
+        || device_items == nullptr || item_capacity < item_count
+        || item_count > std::numeric_limits<std::uint32_t>::max()
+        || item_count > std::numeric_limits<std::size_t>::max()
+            / sizeof(DevicePagedDecodeBatchItem)) {
+        if (items != nullptr) {
+            for (std::size_t index = 0; index < item_count; ++index) {
+                items[index].status = invalidArgument();
+            }
+        }
+        return;
+    }
+
+    std::shared_ptr<CudaKvStorage::Impl> storage;
+    cudaStream_t stream = nullptr;
+    std::uint32_t query_head_count = 0;
+    std::size_t ready_count = 0;
+    for (std::size_t index = 0; index < item_count; ++index) {
+        host_items[index] = {};
+        AttentionBatchItem& item = items[index];
+        if (item.transaction == nullptr || item.transaction->impl_ == nullptr) {
+            item.status = invalidArgument();
+            continue;
+        }
+        Impl& impl = *item.transaction->impl_;
+        if (storage == nullptr) {
+            storage = impl.storage;
+            stream = impl.stream;
+            query_head_count = impl.query_head_count;
+        } else if (impl.storage.get() != storage.get()
+            || impl.stream != stream
+            || impl.query_head_count != query_head_count) {
+            item.status = invalidArgument();
+            continue;
+        }
+        item.status = impl.prepareAttention(item.request, host_items[index]);
+        ready_count += item.status.ok() ? 1U : 0U;
+    }
+    if (ready_count == 0 || storage == nullptr) {
+        return;
+    }
+
+    std::size_t const metadata_bytes =
+        item_count * sizeof(DevicePagedDecodeBatchItem);
+    cudaError_t error = cudaMemcpyAsync(
+        device_items,
+        host_items,
+        metadata_bytes,
+        cudaMemcpyHostToDevice,
+        stream
+    );
+    if (error == cudaSuccess) {
+        cuda_detail::launchPagedDecodeAttentionBatch(
+            device_items,
+            static_cast<std::uint32_t>(item_count),
+            storage->micro_data,
+            storage->micro_page_elements,
+            storage->extent_data,
+            storage->extent_page_elements,
+            query_head_count,
+            cuda_storage_detail::deviceLayout(storage->layout),
+            stream
+        );
+        error = cudaGetLastError();
+    }
+    if (error == cudaSuccess) {
+        return;
+    }
+    for (std::size_t index = 0; index < item_count; ++index) {
+        if (items[index].status.ok()
+            && items[index].transaction != nullptr
+            && items[index].transaction->impl_ != nullptr) {
+            items[index].status =
+                items[index].transaction->impl_->failSubmission(error);
+        }
+    }
 }
 
 CudaStatus CudaEngineTransaction::finish() noexcept
